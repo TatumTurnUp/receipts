@@ -39,12 +39,23 @@ holds their irreplaceable personal archive. Convenience never outranks preservat
   widget in module view), "File Audit Log" (per-record modal). All three read
   from `change_log` via `/api/audit` and `/api/records/{id}/history`.
 - Timestamp priority: manual > AI-from-content > EXIF metadata > upload time.
-  `ts_source`/`ts_confidence`/`ts_reasoning` explain every date.
+  `ts_source`/`ts_score`/`ts_reasoning` explain every date. `ts_score` is the
+  owner's 1-10 confidence scale: 10 = exact date visible in content (manual = 10),
+  2-9 = AI inference from context clues (colors: 9-10 green, 6-8 yellow, 1-5 red),
+  1 = metadata/upload fallback with zero content evidence — always flagged red.
+  Hour/minute only when evidenced; midnight means date-only. Multiple visible
+  timestamps -> earliest wins. `ts_confidence` (exact/approximate/guess) is
+  legacy — keep it populated for compatibility, but ts_score is the truth.
+- Timeline sorting: module timelines sort by content date or upload date
+  (`created_at`); both dates always shown (primary large, secondary faint).
 - AI layer is intentionally thin: `call_claude()` in app.py is the ONLY place
   that talks to a model. Anthropic API today.
 
 ## Owner's roadmap (context for future sessions)
 
+- **Cross-module timestamp corroboration:** ts_score inference currently uses
+  sibling records within the same module as evidence. When module linking lands,
+  extend the evidence pool across linked modules.
 - **Module hopping / cross-links:** when a new module is created (e.g. a place),
   scan other modules' records for references; suggest them with approve/deny;
   approved records appear in both modules with a "Shared from [origin]"

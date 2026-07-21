@@ -150,6 +150,13 @@ h2{font-size:16px;margin:22px 0 10px}
 .fb button{background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:2px 8px;font-size:13px}
 .fb button:hover{border-color:var(--accent2)}
 
+/* timestamp confidence score */
+.score{display:inline-flex;align-items:center;justify-content:center;min-width:21px;height:19px;border-radius:6px;font-size:11px;font-weight:800;padding:0 4px;cursor:help}
+.s-r{background:rgba(229,83,75,.18);color:var(--red);border:1px solid rgba(229,83,75,.4)}
+.s-y{background:rgba(232,182,76,.18);color:var(--amber);border:1px solid rgba(232,182,76,.4)}
+.s-g{background:rgba(76,195,138,.18);color:var(--green);border:1px solid rgba(76,195,138,.4)}
+.tl-sec{color:var(--dim);font-size:11px;margin-top:1px}
+
 /* module audit widget */
 #maudit{position:fixed;right:22px;bottom:22px;z-index:40}
 #maudit-fab{background:var(--bg3);border:1px solid var(--line);border-radius:24px;padding:9px 16px;font-weight:600;box-shadow:0 6px 18px rgba(0,0,0,.4)}
@@ -431,8 +438,16 @@ async function refreshRecords(){
   $("mod-records").innerHTML = recs.length? recs.map(cardHtml).join("") :
     `<div class="empty" style="grid-column:1/-1">No records yet. Upload screenshots, add notes or links.</div>`;
   const tl = await api("/timeline?module_id="+state.moduleId);
-  $("mod-timeline").innerHTML = timelineHtml(tl, false);
+  const s = state.tlSort||"content";
+  $("mod-timeline").innerHTML =
+    `<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
+       <span class="sub">Sort by:</span>
+       <button class="btn sm ${s==='content'?'primary':''}" onclick="setTlSort('content')">Content date</button>
+       <button class="btn sm ${s==='upload'?'primary':''}" onclick="setTlSort('upload')">Upload date</button>
+       ${s==='content'?`<span class="sub" style="margin-left:8px">chip = timestamp confidence: <span class="score s-g">9+</span> <span class="score s-y">6–8</span> <span class="score s-r">1–5</span></span>`:""}
+     </div>` + timelineHtml(tl, false, s);
 }
+function setTlSort(s){ state.tlSort=s; refreshRecords(); }
 function modTab(t){
   $("tab-records").classList.toggle("active", t==="records");
   $("tab-timeline").classList.toggle("active", t==="timeline");
@@ -456,24 +471,34 @@ function cardHtml(r){
       ${badge}${amendBadge}${r.why_related?`<div class="why">↳ ${esc(r.why_related)}</div>`:""}
     </div></div>`;
 }
-function timelineHtml(items, showModule){
+function scoreChip(r){
+  const s = r.ts_score||1;
+  const c = s>=9? "g" : s>=6? "y" : "r";
+  return `<span class="score s-${c}" title="Timestamp confidence ${s}/10 — ${esc(r.ts_reasoning||"")}">${s}</span>`;
+}
+function timelineHtml(items, showModule, sortBy="content"){
   if(!items.length) return `<div class="empty">Nothing on the timeline yet.</div>`;
+  const key = r => sortBy==="upload"? (r.created_at||"") : (r.ts_effective||r.created_at||"");
+  const sorted = [...items].sort((a,b)=>key(a).localeCompare(key(b)));
   const groups={};
-  for(const r of items){
-    const d = r.ts_effective? new Date(r.ts_effective) : new Date(r.created_at);
-    const key = isNaN(d)? "Unknown date" : d.toLocaleDateString([], {year:'numeric',month:'long',day:'numeric'});
-    (groups[key]=groups[key]||[]).push(r);
+  for(const r of sorted){
+    const d = new Date(key(r));
+    const gk = isNaN(d)? "Unknown date" : d.toLocaleDateString([], {year:'numeric',month:'long',day:'numeric'});
+    (groups[gk]=groups[gk]||[]).push(r);
   }
   let html='<div class="tl">';
   for(const [date,rs] of Object.entries(groups)){
     html+=`<div class="tl-group"><div class="tl-date">${date}</div>`;
     for(const r of rs){
-      const d=new Date(r.ts_effective||r.created_at);
+      const d=new Date(key(r));
       let time=isNaN(d)?"":d.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
       if(time==="12:00 AM") time="";
+      const sec = sortBy==="upload"
+        ? `content: ${fmtTs(r.ts_effective)}`
+        : `uploaded: ${fmtTs(r.created_at)}`;
       html+=`<div class="tl-item" onclick="openDetail('${r.id}')">
         ${thumbHtml(r,"tl-thumb")}
-        <div class="tl-time">${time}</div>
+        <div class="tl-time">${sortBy==="content"?scoreChip(r)+" ":""}${time}<div class="tl-sec">${sec}</div></div>
         <div style="flex:1">
           <div style="font-weight:600;font-size:13.5px">${esc(r.title||r.original_name||"Untitled")}</div>
           <div class="sub" style="overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical">${esc(r.description||r.body||"")}</div>
@@ -814,7 +839,8 @@ async function openDetail(id){
     ${r.user_context? `<div class="kv"><b>Your context:</b> ${esc(r.user_context)}</div>`:""}
     ${r.tags?.length? `<div class="kv"><b>Tags:</b> ${r.tags.map(esc).join(", ")}</div>`:""}
     <div class="kv" style="margin-top:10px"><b>Timeline date:</b>
-      <span class="badge b-${r.ts_source}">${SRC_LABEL[r.ts_source]} · ${fmtTs(r.ts_effective)} (${r.ts_confidence||"?"})</span></div>
+      ${scoreChip(r)} <span class="badge b-${r.ts_source}">${SRC_LABEL[r.ts_source]} · ${fmtTs(r.ts_effective)}</span>
+      <span class="sub">confidence ${r.ts_score||1}/10 · uploaded ${fmtTs(r.created_at)}</span></div>
     ${r.ts_reasoning? `<div class="kv sub">↳ ${esc(r.ts_reasoning)}</div>`:""}
     <label>Fix the timeline date</label>
     ${dateInputHtml("d")}

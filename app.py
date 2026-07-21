@@ -71,7 +71,7 @@ def db() -> sqlite3.Connection:
 # receipts-data/backups/ (one per day, last 14 kept) so no update can
 # silently destroy history.
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 MIGRATIONS: dict = {
     # v4: audit entries remember their module and a human label, so the
@@ -84,8 +84,17 @@ MIGRATIONS: dict = {
         "WHERE r.id=change_log.entity_id),'') WHERE entity_type='record' AND module_id=''",
         "UPDATE change_log SET module_id=entity_id WHERE entity_type='module' AND module_id=''",
     ],
+    # v5: numeric timestamp confidence (1-10). Backfill maps old text confidence.
+    5: [
+        "ALTER TABLE records ADD COLUMN ts_score INTEGER NOT NULL DEFAULT 0",
+        "UPDATE records SET ts_score = CASE "
+        "WHEN ts_source='manual' THEN 10 "
+        "WHEN ts_source='content' AND ts_confidence='exact' THEN 10 "
+        "WHEN ts_source='content' THEN 7 "
+        "ELSE 1 END WHERE ts_score=0",
+    ],
     # future example:
-    # 5: ["ALTER TABLE modules ADD COLUMN brings_joy INTEGER NOT NULL DEFAULT 0"],
+    # 6: ["ALTER TABLE modules ADD COLUMN brings_joy INTEGER NOT NULL DEFAULT 0"],
 }
 
 
@@ -145,7 +154,8 @@ def init_db():
             tags_json TEXT NOT NULL DEFAULT '[]',
             ts_effective TEXT,                -- ISO timestamp used on the timeline
             ts_source TEXT NOT NULL DEFAULT 'upload',  -- manual|content|metadata|upload
-            ts_confidence TEXT NOT NULL DEFAULT '',    -- exact|approximate|guess
+            ts_confidence TEXT NOT NULL DEFAULT '',    -- exact|approximate|guess (legacy)
+            ts_score INTEGER NOT NULL DEFAULT 0,       -- 1-10 confidence scale
             ts_reasoning TEXT NOT NULL DEFAULT '',
             ai_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL
@@ -372,16 +382,30 @@ VOICE — very important:
 
 Your job:
 1. Describe what the item is and transcribe ALL legible text in it (messages, tweets, captions, dates, usernames).
-2. Determine the best timestamp for WHEN THE CONTENT HAPPENED (not when it was uploaded).
-   Priority of evidence:
-   a. A full date visible in the content itself (e.g. a tweet showing "Mar 3, 2017") -> source "content", confidence "exact" (or "approximate" if no time shown).
-   b. Relative times in content (e.g. "12h ago") combined with the file's capture/metadata time -> compute it -> source "content", confidence "approximate". Example: screenshot metadata says captured July 12 10:33 PM and the tweet says "12h", the tweet was posted ~July 12 10:30 AM.
-   c. File metadata capture time (EXIF) -> source "metadata", confidence "approximate".
-   d. Nothing usable -> return null timestamp, source "upload".
-   RELATIVE-TIME ANCHOR: relative words in the USER'S OWN context note ("today",
-   "yesterday", "last week") are relative to the upload time given in the metadata,
-   NOT to any date visible inside the content. If the user says "this happened today",
-   "today" means the upload date.
+2. Determine the best timestamp for WHEN THE CONTENT HAPPENED (not when it was uploaded),
+   and score your confidence on a strict 1-10 scale:
+   - 10: an exact, complete date is directly visible in the content (e.g. a tweet showing
+     "Mar 3, 2017", a message header "Thu, Jul 16"). Time of day visible too -> still 10.
+   - 9: content date is certain but one small part was resolved by inference
+     (e.g. day+month visible, year pinned down by solid evidence).
+   - 6-8: computed or inferred from real clues: relative times in content ("12h ago")
+     combined with capture metadata; the user's context note ("this was last Thursday" —
+     resolve against the upload date); references to datable events; corroboration from
+     the other records of this module provided below. More independent clues -> higher.
+   - 2-5: weak inference — rough era/season guesses from soft context.
+   - 1: NO usable context at all; falling back to file metadata (EXIF) or upload time.
+     Set source "metadata" or "upload". This is a flagged, untrusted date.
+   Rules:
+   - HOUR AND MINUTE ONLY IF EVIDENCED. If the content shows a time, include it.
+     Otherwise return midnight (T00:00:00) — the UI treats midnight as date-only.
+     Never invent a time of day.
+   - MULTIPLE timestamps visible (e.g. a Slack or iMessage thread spanning times):
+     use the EARLIEST date and time mentioned.
+   - The user's context note is an authoritative hint. Resolve its relative phrases
+     ("today", "yesterday", "last Thursday", "last month") against the upload time
+     given in the metadata — NOT against dates inside the content.
+   - Corroborating records from this module may pin down otherwise vague dates
+     (overlapping conversations, same events). Cite them in your reasoning if used.
 3. Suggest a short title, tags, and any people/places/entities mentioned.
 
 Reply with ONLY a JSON object:
@@ -389,7 +413,7 @@ Reply with ONLY a JSON object:
  "title": str, "description": str, "extracted_text": str,
  "timestamp": str|null (ISO 8601, e.g. "2017-03-03T00:00:00"),
  "timestamp_source": "content"|"metadata"|"upload",
- "timestamp_confidence": "exact"|"approximate"|"guess",
+ "timestamp_score": int 1-10,
  "timestamp_reasoning": str,
  "tags": [str], "entities": [str]
 }"""
@@ -429,6 +453,22 @@ def sibling_titles(module_id: str, exclude_id: str, limit: int = 5) -> list:
     return [r["title"] for r in rows]
 
 
+def sibling_evidence(module_id: str, exclude_id: str, limit: int = 8) -> list:
+    """Recent records in the module, as corroborating evidence for dating new uploads."""
+    conn = db()
+    rows = conn.execute(
+        """SELECT title, ts_effective, ts_score, body FROM records
+           WHERE module_id=? AND id!=? ORDER BY created_at DESC LIMIT ?""",
+        (module_id, exclude_id, limit),
+    ).fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        out.append(f'- "{r["title"] or "Untitled"}" (dated {r["ts_effective"] or "unknown"}, '
+                   f'confidence {r["ts_score"] or "?"}/10): {(r["body"] or "")[:150]}')
+    return out
+
+
 def analyze_record(record: dict, file_path: Optional[Path]) -> dict:
     """Run AI analysis. Returns the parsed JSON result (may be empty)."""
     module = get_module_row(record["module_id"])
@@ -438,6 +478,10 @@ def analyze_record(record: dict, file_path: Optional[Path]) -> dict:
     if titles:
         meta_lines.append("Existing record titles in this module (match their style): "
                           + "; ".join(f'"{t}"' for t in titles))
+    evidence = sibling_evidence(record["module_id"], record["id"])
+    if evidence:
+        meta_lines.append("Other records in this module (corroborating evidence for dating):")
+        meta_lines += evidence
     if file_path and file_path.exists():
         meta_lines.append(f"File name: {record.get('original_name') or file_path.name}")
         ex = exif_datetime(file_path)
@@ -494,10 +538,21 @@ def apply_analysis(record_id: str, result: dict, manual_ts: Optional[str]):
     if not manual_ts and r["ts_source"] != "manual":
         ts = result.get("timestamp")
         src = result.get("timestamp_source", "upload")
+        try:
+            score = max(1, min(10, int(result.get("timestamp_score") or 1)))
+        except Exception:
+            score = 1
+        if src in ("metadata", "upload"):
+            score = 1
         if ts and src in ("content", "metadata"):
             set_col("ts_effective", ts)
             set_col("ts_source", src)
-            set_col("ts_confidence", result.get("timestamp_confidence", "approximate"))
+            set_col("ts_score", score)
+            set_col("ts_confidence", "exact" if score >= 9 else "approximate" if score >= 6 else "guess")
+            set_col("ts_reasoning", result.get("timestamp_reasoning", ""))
+        elif result.get("timestamp_reasoning"):
+            # AI found nothing usable — record stays on metadata/upload date, flagged
+            set_col("ts_score", 1)
             set_col("ts_reasoning", result.get("timestamp_reasoning", ""))
 
     if sets:
@@ -977,22 +1032,22 @@ async def upload(
     manual = manual_timestamp.strip() or None
 
     # initial timestamp: manual > EXIF > upload time
-    ts, src, conf, reason = created, "upload", "guess", "Defaulted to upload time."
+    ts, src, conf, score, reason = created, "upload", "guess", 1, "Defaulted to upload time."
     if manual:
-        ts, src, conf, reason = manual, "manual", "exact", "Set manually at upload."
+        ts, src, conf, score, reason = manual, "manual", "exact", 10, "Set manually at upload."
     else:
         ex = exif_datetime(dest) if kind == "image" else None
         if ex:
-            ts, src, conf = ex, "metadata", "approximate"
-            reason = "From image EXIF capture time."
+            ts, src, conf, score = ex, "metadata", "guess", 1
+            reason = "From image EXIF capture time — no content evidence yet."
 
     conn = db()
     conn.execute(
         """INSERT INTO records (id,module_id,kind,title,body,user_context,file_name,
-           original_name,mime,ts_effective,ts_source,ts_confidence,ts_reasoning,created_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           original_name,mime,ts_effective,ts_source,ts_confidence,ts_score,ts_reasoning,created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (rid, module_id, kind, title, "", user_context, stored, orig, mime,
-         ts, src, conf, reason, created),
+         ts, src, conf, score, reason, created),
     )
     conn.commit()
     conn.close()
@@ -1031,10 +1086,10 @@ def create_note(n: NoteIn):
     src = "manual" if manual else "upload"
     conn.execute(
         """INSERT INTO records (id,module_id,kind,title,body,user_context,
-           ts_effective,ts_source,ts_confidence,ts_reasoning,created_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+           ts_effective,ts_source,ts_confidence,ts_score,ts_reasoning,created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
         (rid, n.module_id, n.kind, n.title, n.body, n.user_context,
-         ts, src, "exact" if manual else "guess",
+         ts, src, "exact" if manual else "guess", 10 if manual else 1,
          "Set manually." if manual else "Defaulted to creation time.", created),
     )
     conn.commit()
@@ -1091,18 +1146,25 @@ def patch_record(rid: str, p: RecordPatch):
         set_col("ts_effective", p.manual_timestamp)
         set_col("ts_source", "manual")
         set_col("ts_confidence", "exact")
+        set_col("ts_score", 10)
         set_col("ts_reasoning", "Set manually.")
     elif p.clear_manual and rec["ts_source"] == "manual":
         ai = rec.get("ai") or {}
         if ai.get("timestamp"):
+            try:
+                sc = max(1, min(10, int(ai.get("timestamp_score") or 7)))
+            except Exception:
+                sc = 7
             set_col("ts_effective", ai["timestamp"])
             set_col("ts_source", ai.get("timestamp_source", "content"))
-            set_col("ts_confidence", ai.get("timestamp_confidence", "approximate"))
+            set_col("ts_confidence", "exact" if sc >= 9 else "approximate" if sc >= 6 else "guess")
+            set_col("ts_score", sc)
             set_col("ts_reasoning", ai.get("timestamp_reasoning", ""))
         else:
             set_col("ts_effective", rec["created_at"])
             set_col("ts_source", "upload")
             set_col("ts_confidence", "guess")
+            set_col("ts_score", 1)
             set_col("ts_reasoning", "Reverted to upload time.")
     if sets:
         vals.append(rid)
