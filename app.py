@@ -71,11 +71,21 @@ def db() -> sqlite3.Connection:
 # receipts-data/backups/ (one per day, last 14 kept) so no update can
 # silently destroy history.
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 MIGRATIONS: dict = {
+    # v4: audit entries remember their module and a human label, so the
+    # Module Audit Log stays meaningful even after a record is deleted.
+    # The UPDATEs only backfill the new (empty) columns from existing data.
+    4: [
+        "ALTER TABLE change_log ADD COLUMN module_id TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE change_log ADD COLUMN entity_label TEXT NOT NULL DEFAULT ''",
+        "UPDATE change_log SET module_id=COALESCE((SELECT r.module_id FROM records r "
+        "WHERE r.id=change_log.entity_id),'') WHERE entity_type='record' AND module_id=''",
+        "UPDATE change_log SET module_id=entity_id WHERE entity_type='module' AND module_id=''",
+    ],
     # future example:
-    # 4: ["ALTER TABLE modules ADD COLUMN brings_joy INTEGER NOT NULL DEFAULT 0"],
+    # 5: ["ALTER TABLE modules ADD COLUMN brings_joy INTEGER NOT NULL DEFAULT 0"],
 }
 
 
@@ -150,6 +160,8 @@ def init_db():
             new_value TEXT NOT NULL DEFAULT '',
             actor TEXT NOT NULL DEFAULT 'you',  -- you|ai|system
             note TEXT NOT NULL DEFAULT '',
+            module_id TEXT NOT NULL DEFAULT '',
+            entity_label TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL
         );
 
@@ -213,19 +225,26 @@ def row_to_record(r: sqlite3.Row) -> dict:
 
 
 def log_change(entity_type: str, entity_id: str, field: str,
-               old: str = "", new: str = "", actor: str = "you", note: str = ""):
+               old: str = "", new: str = "", actor: str = "you", note: str = "",
+               module_id: str = "", label: str = ""):
     """Append-only audit trail. Nothing in the archive changes without a trace."""
     try:
         conn = db()
         conn.execute(
-            """INSERT INTO change_log (id,entity_type,entity_id,field,old_value,new_value,actor,note,created_at)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+            """INSERT INTO change_log (id,entity_type,entity_id,field,old_value,new_value,
+               actor,note,module_id,entity_label,created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (new_id(), entity_type, entity_id, field,
-             str(old or "")[:2000], str(new or "")[:2000], actor, note, now_iso()))
+             str(old or "")[:2000], str(new or "")[:2000], actor, note,
+             module_id, str(label or "")[:120], now_iso()))
         conn.commit()
         conn.close()
     except Exception:
         pass
+
+
+def record_label(rec: dict) -> str:
+    return rec.get("title") or rec.get("original_name") or (rec.get("body") or "")[:60] or "Untitled"
 
 
 def kind_for_mime(mime: str) -> str:
@@ -486,13 +505,16 @@ def apply_analysis(record_id: str, result: dict, manual_ts: Optional[str]):
         conn.execute(f"UPDATE records SET {', '.join(sets)} WHERE id=?", vals)
         conn.commit()
     conn.close()
+    lbl = result.get("title") or r["title"] or r["original_name"] or "Untitled"
     if result.get("description") and result["description"] != r["description"]:
         log_change("record", record_id, "description", r["description"],
-                   result["description"], actor="ai", note="AI analysis")
+                   result["description"], actor="ai", note="AI analysis",
+                   module_id=r["module_id"], label=lbl)
     if result.get("timestamp"):
         log_change("record", record_id, "timestamp", r["ts_effective"],
                    f'{result["timestamp"]} ({result.get("timestamp_source","")})',
-                   actor="ai", note=result.get("timestamp_reasoning", ""))
+                   actor="ai", note=result.get("timestamp_reasoning", ""),
+                   module_id=r["module_id"], label=lbl)
 
 
 # -------------------------------------------------------------- amendments
@@ -570,7 +592,8 @@ def run_amendment_pass(new_rid: str) -> int:
     conn.close()
     for tid, old, nd, reason in pending_logs:
         log_change("record", tid, "description", old, nd, actor="ai",
-                   note=f"Amended after a newer upload: {reason}")
+                   note=f"Amended after a newer upload: {reason}",
+                   module_id=rec["module_id"], label=record_label(by_id[tid]))
     return count
 
 
@@ -881,19 +904,27 @@ def patch_module(mid: str, p: ModulePatch):
     conn.commit()
     conn.close()
     if p.name is not None and p.name != r["name"]:
-        log_change("module", mid, "name", r["name"], p.name)
+        log_change("module", mid, "name", r["name"], p.name, module_id=mid, label=name)
     if p.fields is not None and json.dumps(p.fields) != r["fields_json"]:
-        log_change("module", mid, "fields", r["fields_json"], json.dumps(p.fields))
+        log_change("module", mid, "fields", r["fields_json"], json.dumps(p.fields), module_id=mid, label=name)
     if p.notes is not None and p.notes != r["notes"]:
-        log_change("module", mid, "notes", r["notes"], p.notes)
+        log_change("module", mid, "notes", r["notes"], p.notes, module_id=mid, label=name)
     return {"ok": True}
 
 
 @app.delete("/api/modules/{mid}")
 def delete_module(mid: str):
     conn = db()
+    m = conn.execute("SELECT name FROM modules WHERE id=?", (mid,)).fetchone()
+    nrec = conn.execute("SELECT COUNT(*) c FROM records WHERE module_id=?", (mid,)).fetchone()["c"]
     files = [r["file_name"] for r in conn.execute(
         "SELECT file_name FROM records WHERE module_id=? AND file_name IS NOT NULL", (mid,))]
+    conn.close()
+    if m:
+        log_change("module", mid, "deleted", m["name"], "",
+                   note=f"Module deleted along with its {nrec} record(s)",
+                   module_id=mid, label=m["name"])
+    conn = db()
     conn.execute("DELETE FROM modules WHERE id=?", (mid,))
     conn.commit()
     conn.close()
@@ -965,7 +996,8 @@ async def upload(
     )
     conn.commit()
     conn.close()
-    log_change("record", rid, "created", "", orig, note=f"Uploaded ({mime})")
+    log_change("record", rid, "created", "", orig, note=f"Uploaded ({mime})",
+               module_id=module_id, label=title or orig)
 
     ai_error, amended = None, 0
     if ai_available() and kind == "image":
@@ -1007,7 +1039,8 @@ def create_note(n: NoteIn):
     )
     conn.commit()
     conn.close()
-    log_change("record", rid, "created", "", n.title or n.body[:80], note=f"Added {n.kind}")
+    log_change("record", rid, "created", "", n.title or n.body[:80], note=f"Added {n.kind}",
+               module_id=n.module_id, label=n.title or n.body[:60])
 
     amended = 0
     if ai_available():
@@ -1077,21 +1110,23 @@ def patch_record(rid: str, p: RecordPatch):
         conn.commit()
     conn.close()
     # audit trail for user edits
+    mid, lbl = rec["module_id"], record_label(rec)
     if p.title is not None and p.title != rec["title"]:
-        log_change("record", rid, "title", rec["title"], p.title)
+        log_change("record", rid, "title", rec["title"], p.title, module_id=mid, label=lbl)
     if p.body is not None and p.body != rec["body"]:
-        log_change("record", rid, "body", rec["body"], p.body)
+        log_change("record", rid, "body", rec["body"], p.body, module_id=mid, label=lbl)
     if p.user_context is not None and p.user_context != rec["user_context"]:
-        log_change("record", rid, "context", rec["user_context"], p.user_context)
+        log_change("record", rid, "context", rec["user_context"], p.user_context, module_id=mid, label=lbl)
     if p.tags is not None and p.tags != rec["tags"]:
-        log_change("record", rid, "tags", json.dumps(rec["tags"]), json.dumps(p.tags))
+        log_change("record", rid, "tags", json.dumps(rec["tags"]), json.dumps(p.tags), module_id=mid, label=lbl)
     if p.manual_timestamp:
         log_change("record", rid, "timestamp",
                    f'{rec["ts_effective"]} ({rec["ts_source"]})',
-                   f"{p.manual_timestamp} (manual)")
+                   f"{p.manual_timestamp} (manual)", module_id=mid, label=lbl)
     elif p.clear_manual and rec["ts_source"] == "manual":
         log_change("record", rid, "timestamp",
-                   f'{rec["ts_effective"]} (manual)', "reverted to AI/metadata date")
+                   f'{rec["ts_effective"]} (manual)', "reverted to AI/metadata date",
+                   module_id=mid, label=lbl)
     return get_record(rid)
 
 
@@ -1115,7 +1150,8 @@ def delete_record(rid: str):
     log_change("record", rid, "deleted",
                json.dumps({k: rec.get(k) for k in
                            ("title", "description", "body", "original_name", "ts_effective")}),
-               "", note="Record deleted (snapshot preserved here)")
+               "", note="Record deleted (snapshot preserved here)",
+               module_id=rec["module_id"], label=record_label(rec))
     conn = db()
     conn.execute("DELETE FROM records WHERE id=?", (rid,))
     conn.commit()
@@ -1151,10 +1187,36 @@ def amendment_feedback(aid: str, f: FeedbackIn):
     conn.commit()
     conn.close()
     if f.verdict == "down":
+        tmid, tlbl = "", ""
+        try:
+            trec = get_record(a["target_record_id"])
+            tmid, tlbl = trec["module_id"], record_label(trec)
+        except Exception:
+            pass
         log_change("record", a["target_record_id"], "description",
                    a["new_description"], a["old_description"],
-                   note="You rejected an AI amendment — change reversed")
+                   note="You rejected an AI amendment — change reversed",
+                   module_id=tmid, label=tlbl)
     return {"ok": True, "reversed": f.verdict == "down"}
+
+
+@app.get("/api/audit")
+def audit(module_id: Optional[str] = None, limit: int = 300):
+    conn = db()
+    sql = """SELECT c.*, r.title AS cur_title, r.original_name AS cur_file,
+                    m.name AS module_name
+             FROM change_log c
+             LEFT JOIN records r ON c.entity_type='record' AND r.id = c.entity_id
+             LEFT JOIN modules m ON m.id = c.module_id"""
+    args = []
+    if module_id:
+        sql += " WHERE c.module_id=?"
+        args.append(module_id)
+    sql += " ORDER BY c.created_at DESC LIMIT ?"
+    args.append(min(int(limit), 1000))
+    rows = conn.execute(sql, args).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 @app.get("/api/records/{rid}/history")

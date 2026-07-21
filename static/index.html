@@ -150,6 +150,22 @@ h2{font-size:16px;margin:22px 0 10px}
 .fb button{background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:2px 8px;font-size:13px}
 .fb button:hover{border-color:var(--accent2)}
 
+/* module audit widget */
+#maudit{position:fixed;right:22px;bottom:22px;z-index:40}
+#maudit-fab{background:var(--bg3);border:1px solid var(--line);border-radius:24px;padding:9px 16px;font-weight:600;box-shadow:0 6px 18px rgba(0,0,0,.4)}
+#maudit-fab:hover{border-color:var(--accent)}
+#maudit-panel{position:absolute;right:0;bottom:48px;width:340px;max-height:440px;background:var(--bg2);border:1px solid var(--line);border-radius:14px;box-shadow:0 12px 32px rgba(0,0,0,.55);display:flex;flex-direction:column;overflow:hidden}
+#maudit-head{padding:11px 14px;font-weight:700;font-size:13.5px;border-bottom:1px solid var(--line);background:var(--bg3)}
+#maudit-head button{color:var(--dim)}
+#maudit-body{overflow-y:auto;padding:8px 12px}
+.aud-item{padding:8px 4px;border-bottom:1px solid var(--line);font-size:12.5px;cursor:pointer}
+.aud-item:last-child{border-bottom:none}
+.aud-item:hover{background:var(--bg3)}
+.aud-time{color:var(--dim);font-size:11px}
+.aud-actor-ai{color:var(--accent)}
+.aud-actor-you{color:var(--accent2)}
+.aud-mod{color:var(--accent2);font-size:11.5px}
+
 .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--dim);border-top-color:var(--accent);border-radius:50%;animation:sp 1s linear infinite;vertical-align:-2px;margin-right:7px}
 @keyframes sp{to{transform:rotate(360deg)}}
 .toast{position:fixed;bottom:22px;right:22px;background:var(--bg3);border:1px solid var(--line);padding:12px 16px;border-radius:10px;z-index:99;font-size:13.5px;max-width:340px}
@@ -162,6 +178,7 @@ h2{font-size:16px;margin:22px 0 10px}
   <div id="logo"><span class="mark">🧾</span> Receipts</div>
   <div id="side-scroll">
     <button class="side-btn" onclick="showHome()">🏠&nbsp; Home / Search everything</button>
+    <button class="side-btn" onclick="showAudit()">📜&nbsp; System Audit Log</button>
     <div id="mod-groups"></div>
   </div>
   <div id="side-bottom">
@@ -227,6 +244,22 @@ h2{font-size:16px;margin:22px 0 10px}
     </div>
     <div id="mod-records" class="grid"></div>
     <div id="mod-timeline" class="hidden"></div>
+  </div>
+
+  <!-- SYSTEM AUDIT LOG -->
+  <div id="view-audit" class="hidden">
+    <h1>📜 System Audit Log</h1>
+    <div class="sub">Every change across every module — uploads, edits, AI updates, deletions. Append-only; nothing is ever erased from this trail.</div>
+    <div id="audit-list" style="margin-top:16px"></div>
+  </div>
+</div>
+
+<!-- MODULE AUDIT LOG floating widget -->
+<div id="maudit" class="hidden">
+  <button id="maudit-fab" onclick="toggleModuleAudit()">📜 Audit Log</button>
+  <div id="maudit-panel" class="hidden">
+    <div id="maudit-head">📜 Module Audit Log <button onclick="toggleModuleAudit()" style="float:right">✕</button></div>
+    <div id="maudit-body"></div>
   </div>
 </div>
 
@@ -355,6 +388,8 @@ async function showHome(){
   state.moduleId=null;
   $("view-home").classList.remove("hidden");
   $("view-module").classList.add("hidden");
+  $("view-audit").classList.add("hidden");
+  $("maudit").classList.add("hidden");
   await loadModules();
   $("home-recent").innerHTML = (state.modules.length? state.modules.map(moduleCardHtml).join("") : "") +
     `<div class="card" onclick="openNewModule()" style="border-style:dashed">
@@ -376,7 +411,10 @@ async function showModule(id){
   state.moduleId=id;
   state.module = await api("/modules/"+id);
   $("view-home").classList.add("hidden");
+  $("view-audit").classList.add("hidden");
   $("view-module").classList.remove("hidden");
+  $("maudit").classList.remove("hidden");
+  $("maudit-panel").classList.add("hidden");
   $("mod-results").innerHTML=""; $("mod-q").value="";
   const m=state.module;
   $("m-icon").textContent = ICONS[m.type]||"📁";
@@ -473,6 +511,75 @@ async function doAsk(moduleId, where){
     box.innerHTML=html;
   }catch(e){ box.innerHTML=`<div class="answer">Search failed: ${esc(e.message)}</div>`; }
   btn.disabled=false;
+}
+
+/* ---------------- audit logs ---------------- */
+function auditSentence(e){
+  const who = e.actor==="ai"? `<b class="aud-actor-ai">AI</b>` : e.actor==="system"? "<b>System</b>" : `<b class="aud-actor-you">You</b>`;
+  const label = esc(e.cur_title || e.entity_label || e.cur_file || "a record");
+  const L = `“${label}”`;
+  if(e.entity_type==="module"){
+    if(e.field==="created") return `${who} created this module`;
+    if(e.field==="deleted") return `${who} deleted module ${L}`;
+    if(e.field==="name") return `${who} renamed the module to “${esc(e.new_value)}”`;
+    return `${who} updated the module's ${esc(e.field)}`;
+  }
+  switch(e.field){
+    case "created": return `${who} added ${L}${e.note?` <span class="sub">(${esc(e.note)})</span>`:""}`;
+    case "deleted": return `${who} deleted ${L}`;
+    case "timestamp": return `${who} changed the date of ${L}`;
+    case "description":
+      if(e.actor==="ai" && (e.note||"").startsWith("Amended")) return `${who} linked new context into ${L}`;
+      if((e.note||"").includes("rejected")) return `${who} reversed an AI change on ${L}`;
+      return `${who} ${e.actor==="ai"?"wrote the summary of":"edited the summary of"} ${L}`;
+    case "title": return `${who} renamed ${L}`;
+    case "body": return `${who} edited the content of ${L}`;
+    case "context": return `${who} edited the context of ${L}`;
+    case "tags": return `${who} changed the tags on ${L}`;
+    default: return `${who} changed ${esc(e.field)} on ${L}`;
+  }
+}
+function auditItemHtml(e, showModule){
+  const clickable = e.entity_type==="record" && e.cur_title!==null;
+  return `<div class="aud-item" ${clickable?`onclick="openDetail('${e.entity_id}')"`:""}>
+    <div>${auditSentence(e)}</div>
+    <div class="aud-time">${fmtTs(e.created_at)}${showModule&&e.module_name?` · <span class="aud-mod">${esc(e.module_name)}</span>`:""}${e.note&&e.field!=="created"?` — ${esc(e.note.slice(0,90))}`:""}</div>
+  </div>`;
+}
+async function showAudit(){
+  state.moduleId=null;
+  $("view-home").classList.add("hidden");
+  $("view-module").classList.add("hidden");
+  $("view-audit").classList.remove("hidden");
+  $("maudit").classList.add("hidden");
+  loadModules();
+  const entries = await api("/audit");
+  if(!entries.length){ $("audit-list").innerHTML=`<div class="empty">No changes recorded yet.</div>`; return; }
+  const groups={};
+  for(const e of entries){
+    const d=new Date(e.created_at);
+    const key=isNaN(d)?"Unknown":d.toLocaleDateString([],{year:'numeric',month:'long',day:'numeric'});
+    (groups[key]=groups[key]||[]).push(e);
+  }
+  let html='<div class="tl">';
+  for(const [date,es] of Object.entries(groups)){
+    html+=`<div class="tl-group"><div class="tl-date">${date}</div>
+      <div style="background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:4px 10px">`;
+    html+=es.map(e=>auditItemHtml(e,true)).join("");
+    html+=`</div></div>`;
+  }
+  $("audit-list").innerHTML=html+"</div>";
+}
+async function loadModuleAudit(){
+  if(!state.moduleId) return;
+  const entries = await api("/audit?module_id="+state.moduleId+"&limit=40");
+  $("maudit-body").innerHTML = entries.length? entries.map(e=>auditItemHtml(e,false)).join("") :
+    `<div class="empty" style="padding:16px 0">No activity in this module yet.</div>`;
+}
+function toggleModuleAudit(){
+  const p=$("maudit-panel");
+  p.classList.toggle("hidden");
+  if(!p.classList.contains("hidden")) loadModuleAudit();
 }
 
 /* ---------------- modals ---------------- */
@@ -717,7 +824,7 @@ async function openDetail(id){
     </div>
     <div class="m-actions">
       <button class="btn danger" onclick="deleteRecord('${r.id}')">Delete</button>
-      <button class="btn" onclick="openHistory('${r.id}')">📜 History</button>
+      <button class="btn" onclick="openHistory('${r.id}')">📜 Audit Log</button>
       <button class="btn" id="d-rean" onclick="reanalyze('${r.id}')">🔁 Re-analyze with AI</button>
       <button class="btn primary" onclick="closeModal()">Close</button>
     </div>`);
@@ -731,7 +838,7 @@ async function openHistory(id){
       ${h.old_value?`<div class="kv" style="text-decoration:line-through;opacity:.65">${esc(h.old_value.slice(0,300))}</div>`:""}
       ${h.new_value?`<div class="kv" style="color:var(--text)">${esc(h.new_value.slice(0,300))}</div>`:""}
     </div>`).join("") : `<div class="empty">No changes recorded yet.</div>`;
-  modal(`<h3>📜 Edit history</h3>
+  modal(`<h3>📜 File Audit Log</h3>
     <div class="sub" style="margin-bottom:10px">Every change to this record, by you or the AI. Nothing is ever silently overwritten.</div>
     ${rows}
     <div class="m-actions"><button class="btn primary" onclick="closeModal();openDetail('${id}')">← Back to record</button></div>`);
