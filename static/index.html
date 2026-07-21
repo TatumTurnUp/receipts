@@ -189,7 +189,7 @@ h2{font-size:16px;margin:22px 0 10px}
     <div class="ask-hint">AI reads your records to answer questions. Plain keywords work too.</div>
     <div id="home-results"></div>
     <div class="tabs">
-      <button class="tab active" id="home-tab-recent" onclick="homeTab('recent')">Recent</button>
+      <button class="tab active" id="home-tab-recent" onclick="homeTab('recent')">Modules</button>
       <button class="tab" id="home-tab-timeline" onclick="homeTab('timeline')">Global timeline</button>
     </div>
     <div id="home-recent" class="grid"></div>
@@ -340,16 +340,28 @@ async function loadUsage(){
       ${s.records} record${s.records!==1?"s":""} across ${s.modules} module${s.modules!==1?"s":""}`;
   }catch(e){}
 }
+function moduleCardHtml(m){
+  const last = m.last_activity? `last activity ${fmtTs(m.last_activity)}` : "empty";
+  return `<div class="card" onclick="showModule('${m.id}')">
+    <div class="thumb" style="height:86px">${ICONS[m.type]||"📁"}</div>
+    <div class="cbody">
+      <div class="ct">${esc(m.name)}</div>
+      <div class="cd">${esc(m.notes||GROUPS[m.type]||"")}</div>
+      <span class="badge b-upload">${m.record_count||0} record${m.record_count!==1?"s":""} · ${last}</span>
+    </div></div>`;
+}
 async function showHome(){
   loadUsage();
   state.moduleId=null;
   $("view-home").classList.remove("hidden");
   $("view-module").classList.add("hidden");
-  loadModules();
+  await loadModules();
+  $("home-recent").innerHTML = (state.modules.length? state.modules.map(moduleCardHtml).join("") : "") +
+    `<div class="card" onclick="openNewModule()" style="border-style:dashed">
+       <div class="thumb" style="height:86px;color:var(--dim)">➕</div>
+       <div class="cbody"><div class="ct" style="color:var(--dim)">New module</div>
+       <div class="cd">A person, place, event, or project</div></div></div>`;
   const tl = await api("/timeline");
-  const recent = [...tl].sort((a,b)=>(b.created_at||"").localeCompare(a.created_at||"")).slice(0,12);
-  $("home-recent").innerHTML = recent.length? recent.map(cardHtml).join("") :
-    `<div class="empty" style="grid-column:1/-1">Nothing here yet. Create a module and upload your first receipt.</div>`;
   $("home-timeline").innerHTML = timelineHtml(tl, true);
 }
 function homeTab(t){
