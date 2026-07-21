@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Receipts</title>
+<style>
+:root{
+  --bg:#0f1115; --bg2:#161a22; --bg3:#1e2430; --line:#2a3140;
+  --text:#e8ebf0; --dim:#8b93a5; --accent:#e8b64c; --accent2:#5b8def;
+  --green:#4cc38a; --amber:#e8b64c; --blue:#5b8def; --gray:#6b7280; --red:#e5534b;
+  --radius:12px; --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:15px;height:100vh;display:flex;overflow:hidden}
+button{font-family:var(--font);cursor:pointer;border:none;background:none;color:inherit;font-size:14px}
+input,textarea,select{font-family:var(--font);font-size:14px;background:var(--bg3);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:9px 12px;outline:none;width:100%}
+input:focus,textarea:focus,select:focus{border-color:var(--accent2)}
+textarea{resize:vertical;min-height:70px}
+::placeholder{color:var(--dim)}
+a{color:var(--accent2)}
+
+/* ---------- sidebar ---------- */
+#sidebar{width:250px;min-width:250px;background:var(--bg2);border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
+#logo{padding:18px 16px 12px;display:flex;align-items:center;gap:9px;font-weight:700;font-size:18px;letter-spacing:.3px}
+#logo .mark{font-size:20px}
+#side-scroll{flex:1;overflow-y:auto;padding:4px 10px 10px}
+.side-head{display:flex;justify-content:space-between;align-items:center;padding:12px 6px 4px;color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.8px}
+.mod-item{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:8px;cursor:pointer;color:var(--text)}
+.mod-item:hover{background:var(--bg3)}
+.mod-item.active{background:var(--bg3);outline:1px solid var(--line)}
+.mod-item .cnt{margin-left:auto;color:var(--dim);font-size:12px}
+.side-btn{display:flex;align-items:center;gap:8px;width:100%;padding:8px;border-radius:8px;color:var(--dim);text-align:left}
+.side-btn:hover{background:var(--bg3);color:var(--text)}
+#side-bottom{border-top:1px solid var(--line);padding:8px 10px}
+#ai-dot{width:8px;height:8px;border-radius:50%;background:var(--red);display:inline-block;margin-right:6px}
+#ai-dot.on{background:var(--green)}
+
+/* ---------- main ---------- */
+#main{flex:1;overflow-y:auto;padding:26px 34px 80px}
+.hidden{display:none!important}
+h1{font-size:22px;margin-bottom:4px}
+h2{font-size:16px;margin:22px 0 10px}
+.sub{color:var(--dim);font-size:13px}
+
+/* ask bar */
+.askbar{display:flex;gap:8px;margin:16px 0 6px}
+.askbar input{flex:1;padding:13px 16px;font-size:15px;border-radius:12px}
+.askbar button{background:var(--accent);color:#1a1405;font-weight:600;padding:0 20px;border-radius:12px}
+.askbar button:disabled{opacity:.5}
+.ask-hint{color:var(--dim);font-size:12px;margin-bottom:10px}
+
+/* answer panel */
+.answer{background:var(--bg2);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;margin:14px 0}
+.answer .a-label{font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:var(--accent);margin-bottom:6px}
+.rel-label{font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:var(--accent2);margin:18px 0 8px}
+.why{color:var(--dim);font-size:12px;font-style:italic;margin-top:4px}
+
+/* cards */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;margin-top:10px}
+.card{background:var(--bg2);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;cursor:pointer;transition:border-color .15s}
+.card:hover{border-color:var(--accent2)}
+.card .thumb{height:130px;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:34px;overflow:hidden}
+.card .thumb img{width:100%;height:100%;object-fit:cover}
+.card .cbody{padding:10px 12px}
+.card .ct{font-weight:600;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.card .cd{color:var(--dim);font-size:12px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.badge{display:inline-block;font-size:10.5px;padding:2px 7px;border-radius:20px;margin-top:7px;font-weight:600}
+.b-manual{background:rgba(91,141,239,.15);color:var(--blue)}
+.b-content{background:rgba(76,195,138,.15);color:var(--green)}
+.b-metadata{background:rgba(232,182,76,.15);color:var(--amber)}
+.b-upload{background:rgba(107,114,128,.2);color:#9aa1b0}
+.b-amend{background:rgba(232,182,76,.15);color:var(--amber)}
+
+/* module header */
+.mod-head{display:flex;align-items:flex-start;gap:14px;margin-bottom:6px}
+.mod-icon{font-size:34px;background:var(--bg3);border:1px solid var(--line);border-radius:12px;width:58px;height:58px;display:flex;align-items:center;justify-content:center}
+.mod-actions{margin-left:auto;display:flex;gap:8px}
+.btn{background:var(--bg3);border:1px solid var(--line);padding:8px 14px;border-radius:9px;font-weight:500}
+.btn:hover{border-color:var(--accent2)}
+.btn.primary{background:var(--accent);color:#1a1405;border-color:var(--accent);font-weight:600}
+.btn.danger:hover{border-color:var(--red);color:var(--red)}
+.btn:disabled{opacity:.5;cursor:default}
+.btn.sm{padding:4px 10px;font-size:12.5px;border-radius:7px}
+.fields{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 4px}
+.field-chip{background:var(--bg2);border:1px solid var(--line);border-radius:8px;padding:6px 11px;font-size:12.5px}
+.field-chip b{color:var(--dim);font-weight:500;margin-right:5px}
+
+/* tabs */
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:18px 0 14px}
+.tab{padding:8px 16px;color:var(--dim);border-bottom:2px solid transparent;font-weight:500}
+.tab.active{color:var(--text);border-bottom-color:var(--accent)}
+
+/* timeline */
+.tl{position:relative;margin:10px 0 0 8px;padding-left:26px;border-left:2px solid var(--line)}
+.tl-group{margin-bottom:6px}
+.tl-date{position:relative;font-weight:700;font-size:13px;color:var(--accent);margin:18px 0 8px}
+.tl-date::before{content:"";position:absolute;left:-33px;top:3px;width:12px;height:12px;border-radius:50%;background:var(--accent);border:3px solid var(--bg)}
+.tl-item{position:relative;background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin-bottom:8px;cursor:pointer;display:flex;gap:12px;align-items:center}
+.tl-item:hover{border-color:var(--accent2)}
+.tl-item::before{content:"";position:absolute;left:-31px;top:50%;width:8px;height:8px;border-radius:50%;background:var(--line)}
+.tl-thumb{width:46px;height:46px;border-radius:8px;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:20px;overflow:hidden;flex-shrink:0}
+.tl-thumb img{width:100%;height:100%;object-fit:cover}
+.tl-time{color:var(--dim);font-size:12px;min-width:64px}
+.tl-mod{color:var(--accent2);font-size:12px}
+
+/* modal — anchored to top so it never jumps when content changes */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:flex-start;justify-content:center;z-index:50;padding:7vh 20px 20px;overflow-y:auto}
+.modal{background:var(--bg2);border:1px solid var(--line);border-radius:16px;width:100%;max-width:620px;padding:22px 24px;margin-bottom:40px}
+.modal h3{margin-bottom:14px;font-size:17px}
+.modal label{display:block;color:var(--dim);font-size:12.5px;margin:12px 0 5px}
+.modal .row{display:flex;gap:10px}
+.modal .row>*{flex:1}
+.m-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:20px}
+.detail-img{width:100%;max-height:380px;object-fit:contain;background:var(--bg3);border-radius:10px;margin-bottom:12px}
+.kv{font-size:13px;margin:6px 0;color:var(--dim)}
+.kv b{color:var(--text);font-weight:600}
+.mono{background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:13px;white-space:pre-wrap;max-height:200px;overflow-y:auto;margin:6px 0}
+.chk{display:flex;align-items:center;gap:7px;color:var(--dim);font-size:13px;margin:8px 0;cursor:pointer}
+.chk input{width:auto}
+
+/* presets — always one row of 5 */
+.preset-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:8px 0}
+.preset{border:1px solid var(--line);background:var(--bg3);border-radius:10px;padding:12px 4px;text-align:center;cursor:pointer}
+.preset.sel{border-color:var(--accent);background:rgba(232,182,76,.08)}
+.preset .pi{font-size:22px}
+.preset .pn{font-size:12px;margin-top:5px}
+
+/* upload */
+.drop{border:2px dashed var(--line);border-radius:12px;padding:26px;text-align:center;color:var(--dim);cursor:pointer;margin-top:4px}
+.drop.over{border-color:var(--accent);color:var(--accent)}
+.drop.compact{padding:10px;font-size:13px}
+.file-row{display:flex;align-items:center;gap:10px;background:var(--bg3);border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin-top:8px}
+.file-thumb{width:44px;height:44px;border-radius:7px;background:var(--bg);display:flex;align-items:center;justify-content:center;font-size:20px;overflow:hidden;flex-shrink:0}
+.file-thumb img{width:100%;height:100%;object-fit:cover}
+.file-name{flex:1;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-status{font-size:12px;white-space:nowrap}
+.st-queued{color:var(--dim)} .st-uploading{color:var(--accent2)} .st-done{color:var(--green)} .st-error{color:var(--red)}
+.file-err{color:var(--red);font-size:11.5px;margin-top:2px}
+.icon-btn{padding:4px 8px;border-radius:7px;font-size:14px}
+.icon-btn:hover{background:var(--bg)}
+
+/* amendments */
+.amend{background:rgba(232,182,76,.22);border-bottom:1px dashed var(--amber);border-radius:3px;position:relative;cursor:help}
+.amend .tip{display:none;position:absolute;left:0;top:calc(100% + 6px);z-index:60;width:300px;background:var(--bg3);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:12.5px;color:var(--text);box-shadow:0 8px 24px rgba(0,0,0,.5);cursor:default}
+.amend:hover .tip{display:block}
+.tip .fb{display:flex;gap:6px;margin-top:8px}
+.flag{background:rgba(232,182,76,.08);border:1px solid rgba(232,182,76,.35);border-radius:10px;padding:10px 12px;margin:8px 0;font-size:13px}
+.flag .fb{display:inline-flex;gap:6px;margin-left:8px}
+.fb button{background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:2px 8px;font-size:13px}
+.fb button:hover{border-color:var(--accent2)}
+
+.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--dim);border-top-color:var(--accent);border-radius:50%;animation:sp 1s linear infinite;vertical-align:-2px;margin-right:7px}
+@keyframes sp{to{transform:rotate(360deg)}}
+.toast{position:fixed;bottom:22px;right:22px;background:var(--bg3);border:1px solid var(--line);padding:12px 16px;border-radius:10px;z-index:99;font-size:13.5px;max-width:340px}
+.empty{color:var(--dim);text-align:center;padding:40px 0;font-size:14px}
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+  <div id="logo"><span class="mark">🧾</span> Receipts</div>
+  <div id="side-scroll">
+    <button class="side-btn" onclick="showHome()">🏠&nbsp; Home / Search everything</button>
+    <div id="mod-groups"></div>
+  </div>
+  <div id="side-bottom">
+    <button class="side-btn" onclick="openNewModule()">➕&nbsp; New module</button>
+    <button class="side-btn" onclick="openSettings()"><span id="ai-dot"></span>Settings & AI</button>
+  </div>
+</div>
+
+<div id="main">
+
+  <!-- HOME -->
+  <div id="view-home">
+    <h1>Search everything</h1>
+    <div class="sub">Ask a question across every module, or just type keywords.</div>
+    <div class="askbar">
+      <input id="home-q" placeholder='e.g. "Have Laura and I ever talked about going to Brewskys?"'
+             onkeydown="if(event.key==='Enter')doAsk(null,'home')">
+      <button id="home-ask-btn" onclick="doAsk(null,'home')">Search</button>
+    </div>
+    <div class="ask-hint">AI reads your records to answer questions. Plain keywords work too.</div>
+    <div id="home-results"></div>
+    <div class="tabs">
+      <button class="tab active" id="home-tab-recent" onclick="homeTab('recent')">Recent</button>
+      <button class="tab" id="home-tab-timeline" onclick="homeTab('timeline')">Global timeline</button>
+    </div>
+    <div id="home-recent" class="grid"></div>
+    <div id="home-timeline" class="hidden"></div>
+  </div>
+
+  <!-- MODULE -->
+  <div id="view-module" class="hidden">
+    <div class="mod-head">
+      <div class="mod-icon" id="m-icon"></div>
+      <div style="flex:1">
+        <h1 id="m-name"></h1>
+        <div class="sub" id="m-sub"></div>
+        <div class="fields" id="m-fields"></div>
+      </div>
+      <div class="mod-actions">
+        <button class="btn" onclick="openEditModule()">Edit</button>
+        <button class="btn danger" onclick="deleteModule()">Delete</button>
+      </div>
+    </div>
+    <div class="askbar">
+      <input id="mod-q" placeholder="Ask or search within this module…"
+             onkeydown="if(event.key==='Enter')doAsk(state.moduleId,'mod')">
+      <button id="mod-ask-btn" onclick="doAsk(state.moduleId,'mod')">Search</button>
+    </div>
+    <div id="mod-results"></div>
+    <div class="tabs">
+      <button class="tab active" id="tab-records" onclick="modTab('records')">Records</button>
+      <button class="tab" id="tab-timeline" onclick="modTab('timeline')">Timeline</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <button class="btn primary" onclick="openUpload()">⬆ Upload files</button>
+      <button class="btn" onclick="openNote('note')">✏️ Add note</button>
+      <button class="btn" onclick="openNote('link')">🔗 Add link</button>
+    </div>
+    <div id="mod-records" class="grid"></div>
+    <div id="mod-timeline" class="hidden"></div>
+  </div>
+</div>
+
+<div id="modal-root"></div>
+<div id="toast-root"></div>
+
+<script>
+const ICONS = {person:"👤", event:"📅", place:"📍", project:"🛠️", generic:"📁"};
+const GROUPS = {person:"People", event:"Events", place:"Places", project:"Projects", generic:"Other"};
+const KIND_ICON = {image:"🖼️", video:"🎬", audio:"🎧", link:"🔗", note:"📝", file:"📄"};
+const PRESET_FIELDS = {
+  person:  ["Relationship","How we met"],
+  event:   ["When","Where"],
+  place:   ["Location"],
+  project: ["Goal","Status"],
+  generic: []
+};
+const NAME_PLACEHOLDER = {
+  person:  "e.g. Laura, Dad, Landlord, CPA",
+  event:   "e.g. World Cup 2026, Kendrick v Drake, Company Layoffs",
+  place:   "e.g. Brewskys, The Lake House, Mom's Neighborhood",
+  project: "e.g. Kitchen Remodel, Job Hunt, Novel Draft",
+  generic: "e.g. Car Stuff, Tax Season, Receipts To Sort"
+};
+const NOTES_PLACEHOLDER = {
+  person:  "Include any context about this person that helps explain who they are.\ne.g. \"We grew up together\" · \"This person is a lolcow on Twitter\" · \"Online person of interest I'm following to track their decisions and see if they go back on anything they say\"",
+  event:   "Describe what this event is and why you're tracking it.\ne.g. \"Tracking the Kendrick v Drake beef — every diss, tweet, and response in order\" · \"Our trip to the 2026 World Cup\"",
+  place:   "Describe this place and why it matters.\ne.g. \"Bar downtown that keeps coming up in plans with friends\" · \"The house we're thinking about buying\"",
+  project: "Describe the project and what counts as progress.\ne.g. \"Everything related to the kitchen remodel — quotes, contractor texts, receipts\"",
+  generic: "Describe what belongs in this module so the AI can file and search it well.\ne.g. \"Anything related to my car — repairs, insurance, the accident in March\""
+};
+const SRC_LABEL = {manual:"📌 manual", content:"🔍 from content", metadata:"🗂 from metadata", upload:"⬆ upload time"};
+const MODELS = [
+  ["claude-opus-4-8","Opus — most careful, most expensive"],
+  ["claude-sonnet-5","Sonnet — fast + smart (default)"],
+  ["claude-haiku-4-5-20251001","Haiku — cheapest"]
+];
+
+let state = {modules:[], moduleId:null, module:null, aiOn:false};
+
+const $ = id => document.getElementById(id);
+const esc = s => (s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+async function api(path, opts={}){
+  const r = await fetch("/api"+path, opts);
+  if(!r.ok){ let t=await r.text(); try{t=JSON.parse(t).detail}catch(e){}; throw new Error(t||r.status); }
+  return r.json();
+}
+const jpost = (p,b,method="POST") => api(p,{method,headers:{"Content-Type":"application/json"},body:JSON.stringify(b)});
+
+function toast(msg, ms=3500){
+  const d=document.createElement("div"); d.className="toast"; d.innerHTML=msg;
+  $("toast-root").appendChild(d); setTimeout(()=>d.remove(),ms);
+}
+
+function fmtTs(iso){
+  if(!iso) return "no date";
+  const d=new Date(iso); if(isNaN(d)) return iso;
+  const opts={year:'numeric',month:'short',day:'numeric'};
+  const t=d.toLocaleTimeString([], {hour:'numeric',minute:'2-digit'});
+  return d.toLocaleDateString([],opts)+(t!=="12:00 AM"? " · "+t : "");
+}
+
+/* --------- date + optional time widget --------- */
+function dateInputHtml(prefix, hint){
+  return `${hint?`<div class="sub" style="margin-top:4px">${hint}</div>`:""}
+    <div class="row" style="margin-top:6px">
+      <input type="date" id="${prefix}-date">
+      <input type="time" id="${prefix}-time" class="hidden">
+    </div>
+    <label class="chk"><input type="checkbox" id="${prefix}-timechk"
+      onchange="$('${prefix}-time').classList.toggle('hidden', !this.checked)"> Include time</label>`;
+}
+function readDateInput(prefix){
+  const d=$(prefix+"-date").value;
+  if(!d) return null;
+  const withTime=$(prefix+"-timechk").checked && $(prefix+"-time").value;
+  return withTime? `${d}T${$(prefix+"-time").value}:00` : `${d}T00:00:00`;
+}
+
+/* ---------------- sidebar ---------------- */
+async function loadModules(){
+  state.modules = await api("/modules");
+  const byType={};
+  for(const m of state.modules) (byType[m.type]=byType[m.type]||[]).push(m);
+  let html="";
+  for(const t of ["person","event","place","project","generic"]){
+    if(!byType[t]) continue;
+    html += `<div class="side-head"><span>${GROUPS[t]}</span></div>`;
+    for(const m of byType[t]){
+      html += `<div class="mod-item ${m.id===state.moduleId?'active':''}" onclick="showModule('${m.id}')">
+        <span>${ICONS[t]}</span><span>${esc(m.name)}</span><span class="cnt">${m.record_count||""}</span></div>`;
+    }
+  }
+  $("mod-groups").innerHTML = html || `<div class="side-head"><span>No modules yet</span></div>`;
+}
+
+/* ---------------- home ---------------- */
+async function showHome(){
+  state.moduleId=null;
+  $("view-home").classList.remove("hidden");
+  $("view-module").classList.add("hidden");
+  loadModules();
+  const tl = await api("/timeline");
+  const recent = [...tl].sort((a,b)=>(b.created_at||"").localeCompare(a.created_at||"")).slice(0,12);
+  $("home-recent").innerHTML = recent.length? recent.map(cardHtml).join("") :
+    `<div class="empty" style="grid-column:1/-1">Nothing here yet. Create a module and upload your first receipt.</div>`;
+  $("home-timeline").innerHTML = timelineHtml(tl, true);
+}
+function homeTab(t){
+  $("home-tab-recent").classList.toggle("active", t==="recent");
+  $("home-tab-timeline").classList.toggle("active", t==="timeline");
+  $("home-recent").classList.toggle("hidden", t!=="recent");
+  $("home-timeline").classList.toggle("hidden", t!=="timeline");
+}
+
+/* ---------------- module view ---------------- */
+async function showModule(id){
+  state.moduleId=id;
+  state.module = await api("/modules/"+id);
+  $("view-home").classList.add("hidden");
+  $("view-module").classList.remove("hidden");
+  $("mod-results").innerHTML=""; $("mod-q").value="";
+  const m=state.module;
+  $("m-icon").textContent = ICONS[m.type]||"📁";
+  $("m-name").textContent = m.name;
+  $("m-sub").textContent = (GROUPS[m.type]||"Module").replace(/s$/,"") + (m.notes? " — "+m.notes : "");
+  $("m-fields").innerHTML = Object.entries(m.fields||{}).filter(([k,v])=>v)
+    .map(([k,v])=>`<div class="field-chip"><b>${esc(k)}</b>${esc(v)}</div>`).join("");
+  loadModules();
+  modTab("records");
+  await refreshRecords();
+}
+async function refreshRecords(){
+  const recs = await api(`/modules/${state.moduleId}/records`);
+  $("mod-records").innerHTML = recs.length? recs.map(cardHtml).join("") :
+    `<div class="empty" style="grid-column:1/-1">No records yet. Upload screenshots, add notes or links.</div>`;
+  const tl = await api("/timeline?module_id="+state.moduleId);
+  $("mod-timeline").innerHTML = timelineHtml(tl, false);
+}
+function modTab(t){
+  $("tab-records").classList.toggle("active", t==="records");
+  $("tab-timeline").classList.toggle("active", t==="timeline");
+  $("mod-records").classList.toggle("hidden", t!=="records");
+  $("mod-timeline").classList.toggle("hidden", t!=="timeline");
+}
+
+/* ---------------- cards & timeline ---------------- */
+function thumbHtml(r, cls){
+  if(r.kind==="image") return `<div class="${cls}"><img src="/api/files/${r.id}" loading="lazy"></div>`;
+  return `<div class="${cls}">${KIND_ICON[r.kind]||"📄"}</div>`;
+}
+function cardHtml(r){
+  const badge = `<span class="badge b-${r.ts_source}">${SRC_LABEL[r.ts_source]||r.ts_source} · ${fmtTs(r.ts_effective)}</span>`;
+  const amendBadge = (r.amendments_target?.length)? ` <span class="badge b-amend">✎ updated</span>` : "";
+  return `<div class="card" onclick="openDetail('${r.id}')">
+    ${thumbHtml(r,"thumb")}
+    <div class="cbody">
+      <div class="ct">${esc(r.title||r.original_name||(r.body||"").slice(0,60)||"Untitled")}</div>
+      <div class="cd">${esc(r.description||r.body||"")}</div>
+      ${badge}${amendBadge}${r.why_related?`<div class="why">↳ ${esc(r.why_related)}</div>`:""}
+    </div></div>`;
+}
+function timelineHtml(items, showModule){
+  if(!items.length) return `<div class="empty">Nothing on the timeline yet.</div>`;
+  const groups={};
+  for(const r of items){
+    const d = r.ts_effective? new Date(r.ts_effective) : new Date(r.created_at);
+    const key = isNaN(d)? "Unknown date" : d.toLocaleDateString([], {year:'numeric',month:'long',day:'numeric'});
+    (groups[key]=groups[key]||[]).push(r);
+  }
+  let html='<div class="tl">';
+  for(const [date,rs] of Object.entries(groups)){
+    html+=`<div class="tl-group"><div class="tl-date">${date}</div>`;
+    for(const r of rs){
+      const d=new Date(r.ts_effective||r.created_at);
+      let time=isNaN(d)?"":d.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
+      if(time==="12:00 AM") time="";
+      html+=`<div class="tl-item" onclick="openDetail('${r.id}')">
+        ${thumbHtml(r,"tl-thumb")}
+        <div class="tl-time">${time}</div>
+        <div style="flex:1">
+          <div style="font-weight:600;font-size:13.5px">${esc(r.title||r.original_name||"Untitled")}</div>
+          <div class="sub" style="overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical">${esc(r.description||r.body||"")}</div>
+          ${showModule?`<div class="tl-mod">${esc(r.module_name||"")}</div>`:""}
+        </div>
+        <span class="badge b-${r.ts_source}">${SRC_LABEL[r.ts_source]||""}</span>
+      </div>`;
+    }
+    html+="</div>";
+  }
+  return html+"</div>";
+}
+
+/* ---------------- ask / search ---------------- */
+async function doAsk(moduleId, where){
+  const input = where==="home"? $("home-q") : $("mod-q");
+  const btn = where==="home"? $("home-ask-btn") : $("mod-ask-btn");
+  const box = where==="home"? $("home-results") : $("mod-results");
+  const q = input.value.trim(); if(!q) return;
+  btn.disabled=true;
+  box.innerHTML=`<div class="answer"><span class="spin"></span>Searching your records…</div>`;
+  try{
+    const res = await jpost("/ask", {question:q, module_id:moduleId});
+    let html=`<div class="answer"><div class="a-label">Answer</div>${esc(res.answer||"")}`;
+    if(res.direct?.length){
+      html+=`<div class="grid">${res.direct.map(cardHtml).join("")}</div>`;
+    } else {
+      html+=`<div class="sub" style="margin-top:8px">No direct matches.</div>`;
+    }
+    if(res.related?.length){
+      html+=`<div class="rel-label">You were looking for that — but there's also this</div>
+             <div class="grid">${res.related.map(cardHtml).join("")}</div>`;
+    }
+    html+=`</div>`;
+    box.innerHTML=html;
+  }catch(e){ box.innerHTML=`<div class="answer">Search failed: ${esc(e.message)}</div>`; }
+  btn.disabled=false;
+}
+
+/* ---------------- modals ---------------- */
+function closeModal(){ $("modal-root").innerHTML=""; }
+function modal(html){
+  $("modal-root").innerHTML=`<div class="overlay" onclick="if(event.target===this)closeModal()"><div class="modal">${html}</div></div>`;
+}
+
+/* new / edit module */
+function openNewModule(){ moduleModal(null); }
+function openEditModule(){ moduleModal(state.module); }
+function moduleModal(m){
+  const type = m? m.type : "person";
+  const presets = ["person","event","place","project","generic"].map(t=>
+    `<div class="preset ${t===type?'sel':''}" data-t="${t}" onclick="pickPreset(this)">
+       <div class="pi">${ICONS[t]}</div><div class="pn">${GROUPS[t].replace(/s$/,"")}</div></div>`).join("");
+  modal(`<h3>${m? "Edit":"New"} module</h3>
+    <label>Type</label><div class="preset-grid" id="preset-grid" ${m?'style="pointer-events:none;opacity:.6"':''}>${presets}</div>
+    <label>Name</label><input id="nm-name" placeholder="${esc(NAME_PLACEHOLDER[type])}" value="${m?esc(m.name):""}">
+    <div id="nm-fields"></div>
+    <label>Notes — context the AI uses when reading and searching this module</label>
+    <textarea id="nm-notes" rows="4" placeholder="${esc(NOTES_PLACEHOLDER[type])}">${m?esc(m.notes):""}</textarea>
+    <div class="m-actions"><button class="btn" onclick="closeModal()">Cancel</button>
+    <button class="btn primary" onclick="saveModule(${m?`'${m.id}'`:"null"})">${m?"Save":"Create"}</button></div>`);
+  renderPresetFields(type, m? m.fields : {});
+}
+function pickPreset(el){
+  document.querySelectorAll(".preset").forEach(p=>p.classList.remove("sel"));
+  el.classList.add("sel");
+  const t = el.dataset.t;
+  $("nm-name").placeholder = NAME_PLACEHOLDER[t];
+  $("nm-notes").placeholder = NOTES_PLACEHOLDER[t];
+  renderPresetFields(t, {});
+}
+function renderPresetFields(type, values){
+  const fields = PRESET_FIELDS[type]||[];
+  $("nm-fields").innerHTML = fields.map(f=>
+    `<label>${esc(f)}</label><input class="preset-field" data-k="${esc(f)}" value="${esc(values[f]||"")}">`).join("");
+}
+async function saveModule(id){
+  const name=$("nm-name").value.trim(); if(!name){toast("Give it a name");return;}
+  const type=document.querySelector(".preset.sel").dataset.t;
+  const fields={};
+  document.querySelectorAll(".preset-field").forEach(i=>{ if(i.value.trim()) fields[i.dataset.k]=i.value.trim(); });
+  if(id){ await jpost("/modules/"+id, {name, fields, notes:$("nm-notes").value}, "PATCH"); closeModal(); showModule(id); }
+  else { const r=await jpost("/modules", {name, type, fields, notes:$("nm-notes").value}); closeModal(); showModule(r.id); }
+}
+async function deleteModule(){
+  if(!confirm(`Delete "${state.module.name}" and ALL its records? This cannot be undone.`)) return;
+  await api("/modules/"+state.moduleId, {method:"DELETE"});
+  showHome();
+}
+
+/* ---------------- upload ---------------- */
+let uFiles=[]; // {file, key, status: queued|uploading|done|error, error, ctrl, url}
+let uKey=0;
+
+function openUpload(){
+  uFiles=[];
+  modal(`<h3>Upload to ${esc(state.module.name)}</h3>
+    <div id="u-zone"></div>
+    <input type="file" id="u-file" multiple style="display:none" onchange="uAdd(this.files);this.value=''">
+    <label>Context for the AI (optional but helps a lot)</label>
+    <textarea id="u-ctx" rows="2" placeholder="e.g. Screenshot of texts between me and Laura from around March"></textarea>
+    <label>Date (optional — overrides everything; leave blank and the AI figures it out from content, "12h ago", EXIF…)</label>
+    ${dateInputHtml("u")}
+    <div class="m-actions"><button class="btn" onclick="closeModal()">Close</button>
+    <button class="btn primary" id="u-go" onclick="doUpload()">Upload</button></div>`);
+  renderUZone();
+}
+function bindDrop(el){
+  el.addEventListener("dragover",e=>{e.preventDefault();el.classList.add("over");});
+  el.addEventListener("dragleave",()=>el.classList.remove("over"));
+  el.addEventListener("drop",e=>{e.preventDefault();el.classList.remove("over");uAdd(e.dataTransfer.files);});
+}
+function renderUZone(){
+  const zone=$("u-zone"); if(!zone) return;
+  let html="";
+  if(!uFiles.length){
+    html=`<div class="drop" id="u-drop" onclick="$('u-file').click()">Drop files here or click to choose<br>
+      <span style="font-size:12px">screenshots, photos, videos, audio, PDFs — anything</span></div>`;
+  } else {
+    html = uFiles.map(f=>{
+      const thumb = f.url? `<img src="${f.url}">` : (KIND_ICON[f.file.type.split("/")[0]]||"📄");
+      let status="", btns="";
+      if(f.status==="queued"){ status=`<span class="file-status st-queued">ready</span>`;
+        btns=`<button class="icon-btn" title="Remove" onclick="uRemove(${f.key})">✕</button>`; }
+      if(f.status==="uploading"){ status=`<span class="file-status st-uploading"><span class="spin"></span>uploading…</span>`;
+        btns=`<button class="icon-btn" title="Cancel" onclick="uCancel(${f.key})">✕</button>`; }
+      if(f.status==="done"){ status=`<span class="file-status st-done">✓ done${f.amended?` · updated ${f.amended} earlier record${f.amended>1?"s":""}`:""}</span>`; }
+      if(f.status==="error"){ status=`<span class="file-status st-error">failed</span>`;
+        btns=`<button class="icon-btn" title="Retry" onclick="uRetry(${f.key})">🔁</button>
+              <button class="icon-btn" title="Remove" onclick="uRemove(${f.key})">✕</button>`; }
+      return `<div class="file-row"><div class="file-thumb">${thumb}</div>
+        <div style="flex:1;min-width:0"><div class="file-name">${esc(f.file.name)}</div>
+          ${f.status==="error"?`<div class="file-err">${esc(f.error||"")}</div>`:""}</div>
+        ${status}${btns}</div>`;
+    }).join("") +
+    `<div class="drop compact" id="u-drop" onclick="$('u-file').click()" style="margin-top:8px">＋ Add more files (or drop here)</div>`;
+  }
+  zone.innerHTML=html;
+  const d=$("u-drop"); if(d) bindDrop(d);
+  const pending = uFiles.filter(f=>f.status==="queued"||f.status==="error").length;
+  const go=$("u-go");
+  if(go && !state.uploading){ go.textContent = pending? `⬆ Upload ${pending} file${pending>1?"s":""}` : "Upload"; go.disabled=!pending; }
+}
+function uAdd(files){
+  for(const f of files){
+    const item={file:f, key:++uKey, status:"queued", error:null, ctrl:null,
+      url: f.type.startsWith("image/")? URL.createObjectURL(f):null};
+    uFiles.push(item);
+  }
+  renderUZone();
+}
+function uRemove(key){ uFiles=uFiles.filter(f=>f.key!==key); renderUZone(); }
+function uCancel(key){ const f=uFiles.find(f=>f.key===key); if(f?.ctrl) f.ctrl.abort(); }
+function uRetry(key){ const f=uFiles.find(f=>f.key===key); if(f){f.status="queued";f.error=null;} renderUZone(); doUpload(); }
+
+async function uploadOne(f, ctx, ts){
+  f.status="uploading"; f.ctrl=new AbortController(); renderUZone();
+  const fd=new FormData();
+  fd.append("module_id", state.moduleId);
+  fd.append("file", f.file);
+  fd.append("user_context", ctx);
+  if(ts) fd.append("manual_timestamp", ts);
+  try{
+    const r=await api("/upload",{method:"POST",body:fd,signal:f.ctrl.signal});
+    f.status="done"; f.amended=r.amended||0;
+    if(r.ai_error){
+      // file is saved (retrying would duplicate it) — analysis just failed
+      toast("⚠️ "+esc(f.file.name)+": saved, but AI analysis failed ("+esc(r.ai_error.slice(0,100))+"). Open it and hit Re-analyze.",7000);
+    }
+  }catch(e){
+    f.status="error";
+    f.error = e.name==="AbortError"? "Canceled by you." : (e.message||"Upload failed — is the app still running?");
+  }
+  f.ctrl=null; renderUZone();
+}
+async function doUpload(){
+  if(state.uploading) return;
+  const queue = uFiles.filter(f=>f.status==="queued");
+  if(!queue.length) return;
+  state.uploading=true;
+  const go=$("u-go"); go.disabled=true; go.innerHTML=`<span class="spin"></span>Uploading…`;
+  const ctx=$("u-ctx").value, ts=readDateInput("u");
+  for(const f of queue){
+    if(f.status!=="queued") continue;
+    await uploadOne(f, ctx, ts);
+  }
+  state.uploading=false;
+  const errs=uFiles.filter(f=>f.status==="error").length;
+  const done=uFiles.filter(f=>f.status==="done").length;
+  const amended=uFiles.reduce((n,f)=>n+(f.amended||0),0);
+  renderUZone();
+  refreshRecords(); loadModules();
+  if(!errs){
+    closeModal();
+    toast(`Uploaded ${done} file${done>1?"s":""}.`+(amended?` ✎ AI updated ${amended} earlier record${amended>1?"s":""} with new context — look for the highlights.`:""), amended?7000:3000);
+  } else {
+    const go2=$("u-go"); if(go2){go2.disabled=false; go2.textContent="Upload";}
+    toast(`${done} uploaded, ${errs} failed — see details in the list.`,6000);
+  }
+}
+
+/* ---------------- note / link ---------------- */
+function openNote(kind){
+  modal(`<h3>Add ${kind==="link"?"link":"note"} to ${esc(state.module.name)}</h3>
+    <label>Title (optional)</label><input id="n-title">
+    <label>${kind==="link"?"URL":"Text"}</label>
+    ${kind==="link"?`<input id="n-body" placeholder="https://…">`:`<textarea id="n-body" rows="5" placeholder="Paste the text, quote, or memory here"></textarea>`}
+    <label>Context (optional)</label><input id="n-ctx" placeholder="Where this came from, why it matters">
+    <label>Date (optional)</label>
+    ${dateInputHtml("n")}
+    <div class="m-actions"><button class="btn" onclick="closeModal()">Cancel</button>
+    <button class="btn primary" id="n-save" onclick="saveNote('${kind}')">Save</button></div>`);
+}
+async function saveNote(kind){
+  const body=$("n-body").value.trim(); if(!body){toast("Nothing to save");return;}
+  const btn=$("n-save"); btn.disabled=true; btn.innerHTML=`<span class="spin"></span>Saving…`;
+  try{
+    const r=await jpost("/notes",{module_id:state.moduleId, kind, title:$("n-title").value,
+      body, user_context:$("n-ctx").value, manual_timestamp: readDateInput("n")});
+    closeModal(); refreshRecords(); loadModules();
+    if(r.amended) toast(`Saved. ✎ AI updated ${r.amended} earlier record${r.amended>1?"s":""} with new context.`,6000);
+  }catch(e){ btn.disabled=false; btn.textContent="Save"; toast("Save failed: "+esc(e.message)); }
+}
+
+/* ---------------- record detail ---------------- */
+function descWithAmends(r){
+  let html = esc(r.description||"");
+  for(const a of (r.amendments_target||[])){
+    const at = esc(a.added_text||"");
+    if(!at || !html.includes(at)) continue;
+    const tip = `<span class="tip" onclick="event.stopPropagation()">
+      This was added after you uploaded <a href="#" onclick="closeModal();openDetail('${a.source_record_id}');return false">${esc(a.source_title||a.source_file||"a newer file")}</a>,
+      which revealed: ${esc(a.reason)}
+      <div class="fb">${fbBtns(a)}</div></span>`;
+    html = html.replace(at, `<span class="amend">${at}${tip}</span>`);
+  }
+  return html;
+}
+function fbBtns(a){
+  if(a.verdict==="up") return `<span class="sub">👍 you confirmed this</span>`;
+  if(a.verdict==="neutral") return `<span class="sub">😐 noted</span>`;
+  return `<button onclick="amendFb('${a.id}','up','${a.target_record_id}')" title="Correct change">👍</button>
+    <button onclick="amendFb('${a.id}','neutral','${a.target_record_id}')" title="Neutral">😐</button>
+    <button onclick="amendFb('${a.id}','down','${a.target_record_id}')" title="Wrong — undo it">👎</button>`;
+}
+async function amendFb(aid, verdict, backTo){
+  try{
+    const r=await jpost(`/amendments/${aid}/feedback`,{verdict});
+    toast(verdict==="down"? "Change reversed — the AI will learn from this." :
+          verdict==="up"? "Thanks — the AI will remember this was right." : "Noted.");
+    closeModal(); openDetail(backTo);
+    if(state.moduleId) refreshRecords();
+  }catch(e){ toast("Feedback failed: "+esc(e.message)); }
+}
+async function openDetail(id){
+  const r = await api("/records/"+id);
+  const img = r.kind==="image"? `<img class="detail-img" src="/api/files/${r.id}">` :
+    (r.file_name? `<div class="kv"><b>File:</b> <a href="/api/files/${r.id}" target="_blank">${esc(r.original_name||"open")}</a></div>` : "");
+  const srcFlags = (r.amendments_source||[]).map(a=>`
+    <div class="flag">✎ This item was used to update
+      <a href="#" onclick="closeModal();openDetail('${a.target_record_id}');return false">${esc(a.target_title||a.target_file||"another record")}</a>
+      — ${esc(a.reason)} ${a.status==="reversed"?'<span class="sub">(reversed)</span>':`<span class="fb">${fbBtns(a)}</span>`}
+    </div>`).join("");
+  modal(`<h3>${esc(r.title||r.original_name||"Record")}</h3>
+    ${img}
+    ${r.description? `<div class="kv"><b>Summary:</b> ${descWithAmends(r)}</div>`:""}
+    ${srcFlags}
+    ${r.body? `<div class="kv"><b>${r.kind==="link"?"Link":"Content"}:</b></div><div class="mono">${r.kind==="link"?`<a href="${esc(r.body)}" target="_blank">${esc(r.body)}</a>`:esc(r.body)}</div>`:""}
+    ${r.user_context? `<div class="kv"><b>Your context:</b> ${esc(r.user_context)}</div>`:""}
+    ${r.tags?.length? `<div class="kv"><b>Tags:</b> ${r.tags.map(esc).join(", ")}</div>`:""}
+    <div class="kv" style="margin-top:10px"><b>Timeline date:</b>
+      <span class="badge b-${r.ts_source}">${SRC_LABEL[r.ts_source]} · ${fmtTs(r.ts_effective)} (${r.ts_confidence||"?"})</span></div>
+    ${r.ts_reasoning? `<div class="kv sub">↳ ${esc(r.ts_reasoning)}</div>`:""}
+    <label>Fix the timeline date</label>
+    ${dateInputHtml("d")}
+    <div class="row" style="margin-top:8px">
+      <button class="btn" onclick="setManualTs('${r.id}')">Set date</button>
+      ${r.ts_source==="manual"? `<button class="btn" onclick="clearManualTs('${r.id}')">Remove manual date</button>`:""}
+    </div>
+    <div class="m-actions">
+      <button class="btn danger" onclick="deleteRecord('${r.id}')">Delete</button>
+      <button class="btn" onclick="openHistory('${r.id}')">📜 History</button>
+      <button class="btn" id="d-rean" onclick="reanalyze('${r.id}')">🔁 Re-analyze with AI</button>
+      <button class="btn primary" onclick="closeModal()">Close</button>
+    </div>`);
+}
+async function openHistory(id){
+  const hist = await api(`/records/${id}/history`);
+  const ACTOR = {you:"🧍 You", ai:"🤖 AI", system:"⚙️ System"};
+  const rows = hist.length? hist.map(h=>`
+    <div class="flag" style="border-color:var(--line);background:var(--bg3)">
+      <div class="sub">${fmtTs(h.created_at)} · ${ACTOR[h.actor]||h.actor} · <b style="color:var(--text)">${esc(h.field)}</b>${h.note?` — ${esc(h.note)}`:""}</div>
+      ${h.old_value?`<div class="kv" style="text-decoration:line-through;opacity:.65">${esc(h.old_value.slice(0,300))}</div>`:""}
+      ${h.new_value?`<div class="kv" style="color:var(--text)">${esc(h.new_value.slice(0,300))}</div>`:""}
+    </div>`).join("") : `<div class="empty">No changes recorded yet.</div>`;
+  modal(`<h3>📜 Edit history</h3>
+    <div class="sub" style="margin-bottom:10px">Every change to this record, by you or the AI. Nothing is ever silently overwritten.</div>
+    ${rows}
+    <div class="m-actions"><button class="btn primary" onclick="closeModal();openDetail('${id}')">← Back to record</button></div>`);
+}
+async function setManualTs(id){
+  const v=readDateInput("d"); if(!v){toast("Pick a date first");return;}
+  await jpost("/records/"+id,{manual_timestamp:v},"PATCH");
+  closeModal(); toast("Date updated");
+  state.moduleId? refreshRecords() : showHome();
+}
+async function clearManualTs(id){
+  await jpost("/records/"+id,{clear_manual:true},"PATCH");
+  closeModal(); toast("Manual date removed — reverted to the AI/metadata date.");
+  state.moduleId? refreshRecords() : showHome();
+}
+async function reanalyze(id){
+  const b=$("d-rean"); b.disabled=true; b.innerHTML=`<span class="spin"></span>Analyzing…`;
+  try{ await jpost("/records/"+id+"/reanalyze",{}); closeModal(); toast("Re-analyzed ✓");
+    state.moduleId? refreshRecords() : showHome();
+  }catch(e){ toast("Failed: "+esc(e.message)); b.disabled=false; b.textContent="🔁 Re-analyze with AI"; }
+}
+async function deleteRecord(id){
+  if(!confirm("Delete this record?")) return;
+  await api("/records/"+id,{method:"DELETE"});
+  closeModal(); state.moduleId? refreshRecords():showHome(); loadModules();
+}
+
+/* ---------------- settings ---------------- */
+async function openSettings(){
+  const s = await api("/settings");
+  const current = s.model||"claude-sonnet-5";
+  let opts = MODELS.map(([v,l])=>`<option value="${v}" ${v===current?"selected":""}>${l}</option>`).join("");
+  if(!MODELS.some(([v])=>v===current)) opts += `<option value="${esc(current)}" selected>${esc(current)} (custom)</option>`;
+  modal(`<h3>Settings</h3>
+    <div class="kv">AI status: <b>${s.has_key? "🟢 connected ("+esc(s.key_preview)+")" : "🔴 no API key"}</b></div>
+    <div class="sub" style="margin:8px 0">AI powers upload analysis (reading screenshots, figuring out dates) and question-answering search. Your files always stay on this computer — only items being analyzed are sent to the AI. Get a key at <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a>.</div>
+    <label>Anthropic API key</label>
+    <input id="s-key" type="password" placeholder="${s.has_key? "•••••••• (leave blank to keep current)":"sk-ant-…"}">
+    <label>Model</label>
+    <select id="s-model">${opts}</select>
+    <div class="m-actions"><button class="btn" onclick="closeModal()">Cancel</button>
+    <button class="btn primary" onclick="saveSettings()">Save</button></div>`);
+}
+async function saveSettings(){
+  const key=$("s-key").value.trim();
+  const body={model:$("s-model").value};
+  if(key) body.anthropic_api_key=key;
+  const r=await jpost("/settings", body);
+  state.aiOn=r.ai; $("ai-dot").classList.toggle("on", r.ai);
+  closeModal(); toast(r.ai? "AI connected ✓":"Saved (AI off — no key)");
+}
+
+/* init */
+(async function(){
+  try{ const h=await api("/health"); state.aiOn=h.ai; $("ai-dot").classList.toggle("on",h.ai); }catch(e){}
+  showHome();
+})();
+</script>
+</body>
+</html>
