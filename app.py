@@ -769,6 +769,40 @@ def health():
     return {"ok": True, "ai": ai_available()}
 
 
+@app.post("/api/restart")
+def restart():
+    """Re-exec the server process so it picks up updated code. Data is untouched."""
+    import sys
+    import threading
+
+    def _reexec():
+        os.environ["RECEIPTS_NO_BROWSER"] = "1"  # don't open a second tab
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    threading.Timer(0.6, _reexec).start()
+    return {"ok": True}
+
+
+@app.get("/api/stats")
+def stats():
+    files_bytes = sum(f.stat().st_size for f in FILES.glob("*") if f.is_file())
+    db_bytes = DB_PATH.stat().st_size if DB_PATH.exists() else 0
+    backups_bytes = sum(f.stat().st_size for f in (DATA / "backups").glob("*.db")) \
+        if (DATA / "backups").exists() else 0
+    conn = db()
+    records = conn.execute("SELECT COUNT(*) c FROM records").fetchone()["c"]
+    modules = conn.execute("SELECT COUNT(*) c FROM modules").fetchone()["c"]
+    conn.close()
+    return {
+        "files_bytes": files_bytes,
+        "db_bytes": db_bytes,
+        "backups_bytes": backups_bytes,
+        "total_bytes": files_bytes + db_bytes,
+        "records": records,
+        "modules": modules,
+    }
+
+
 @app.get("/api/settings")
 def get_settings():
     cfg = load_config()

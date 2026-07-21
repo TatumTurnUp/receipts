@@ -174,8 +174,13 @@ h2{font-size:16px;margin:22px 0 10px}
 
   <!-- HOME -->
   <div id="view-home">
-    <h1>Search everything</h1>
-    <div class="sub">Ask a question across every module, or just type keywords.</div>
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px">
+      <div>
+        <h1>Search everything</h1>
+        <div class="sub">Ask a question across every module, or just type keywords.</div>
+      </div>
+      <div id="usage" class="sub" style="text-align:right;white-space:nowrap;padding-top:4px"></div>
+    </div>
     <div class="askbar">
       <input id="home-q" placeholder='e.g. "Have Laura and I ever talked about going to Brewskys?"'
              onkeydown="if(event.key==='Enter')doAsk(null,'home')">
@@ -320,7 +325,23 @@ async function loadModules(){
 }
 
 /* ---------------- home ---------------- */
+function fmtBytes(b){
+  if(b>=1e12) return (b/1e12).toFixed(2)+" TB";
+  if(b>=1e9)  return (b/1e9).toFixed(2)+" GB";
+  if(b>=1e6)  return (b/1e6).toFixed(1)+" MB";
+  if(b>=1e3)  return (b/1e3).toFixed(0)+" KB";
+  return b+" B";
+}
+async function loadUsage(){
+  try{
+    const s = await api("/stats");
+    $("usage").innerHTML = `<b style="color:var(--text)">Total information uploaded: ${fmtBytes(s.total_bytes)}</b><br>
+      ${fmtBytes(s.files_bytes)} raw files · ${fmtBytes(s.db_bytes)} index & history<br>
+      ${s.records} record${s.records!==1?"s":""} across ${s.modules} module${s.modules!==1?"s":""}`;
+  }catch(e){}
+}
 async function showHome(){
+  loadUsage();
   state.moduleId=null;
   $("view-home").classList.remove("hidden");
   $("view-module").classList.add("hidden");
@@ -739,8 +760,21 @@ async function openSettings(){
     <input id="s-key" type="password" placeholder="${s.has_key? "•••••••• (leave blank to keep current)":"sk-ant-…"}">
     <label>Model</label>
     <select id="s-model">${opts}</select>
-    <div class="m-actions"><button class="btn" onclick="closeModal()">Cancel</button>
+    <div class="m-actions">
+    <button class="btn" onclick="restartApp()" title="Reload the server after a code update — your data is untouched">⟳ Restart app</button>
+    <button class="btn" onclick="closeModal()">Cancel</button>
     <button class="btn primary" onclick="saveSettings()">Save</button></div>`);
+}
+async function restartApp(){
+  if(!confirm("Restart the app? Takes a few seconds — your data is untouched. Use this after an update to load new code.")) return;
+  try{ await jpost("/restart",{}); }catch(e){}
+  document.body.style.opacity=.4;
+  toast("<span class='spin'></span>Restarting…",6000);
+  const t0=Date.now();
+  const poll=setInterval(async ()=>{
+    try{ await api("/health"); clearInterval(poll); location.reload(); }
+    catch(e){ if(Date.now()-t0>20000){ clearInterval(poll); toast("Still restarting — refresh the page in a moment."); } }
+  }, 800);
 }
 async function saveSettings(){
   const key=$("s-key").value.trim();
