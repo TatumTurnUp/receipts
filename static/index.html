@@ -461,7 +461,7 @@ function thumbHtml(r, cls){
   return `<div class="${cls}">${KIND_ICON[r.kind]||"📄"}</div>`;
 }
 function cardHtml(r){
-  const badge = `<span class="badge b-${r.ts_source}">${SRC_LABEL[r.ts_source]||r.ts_source} · ${fmtTs(r.ts_effective)}</span>`;
+  const badge = `${scoreChip(r)} <span class="badge b-${r.ts_source}">${SRC_LABEL[r.ts_source]||r.ts_source} · ${fmtTs(r.ts_effective)}</span>`;
   const amendBadge = (r.amendments_target?.length)? ` <span class="badge b-amend">✎ updated</span>` : "";
   return `<div class="card" onclick="openDetail('${r.id}')">
     ${thumbHtml(r,"thumb")}

@@ -383,18 +383,24 @@ VOICE — very important:
 Your job:
 1. Describe what the item is and transcribe ALL legible text in it (messages, tweets, captions, dates, usernames).
 2. Determine the best timestamp for WHEN THE CONTENT HAPPENED (not when it was uploaded),
-   and score your confidence on a strict 1-10 scale:
-   - 10: an exact, complete date is directly visible in the content (e.g. a tweet showing
-     "Mar 3, 2017", a message header "Thu, Jul 16"). Time of day visible too -> still 10.
-   - 9: content date is certain but one small part was resolved by inference
-     (e.g. day+month visible, year pinned down by solid evidence).
-   - 6-8: computed or inferred from real clues: relative times in content ("12h ago")
-     combined with capture metadata; the user's context note ("this was last Thursday" —
+   and score your confidence on a strict 1-10 scale. The score measures HOW DIRECTLY
+   the date is evidenced — not how hard you worked for it:
+   - 10: the date is stated outright by a primary source: an exact, complete date visible
+     in the content (a tweet showing "Mar 3, 2017", a header "Thu, Jul 16"), OR the
+     owner's context note states the date explicitly ("these are from July 2nd") AND
+     at least one other signal is consistent (visible times, metadata, referenced events).
+   - 9: the date is stated outright by exactly one source with nothing to corroborate it:
+     the owner's context note alone, or a visible date with one small part (like the year)
+     resolved by solid inference.
+   - 6-8: the date is COMPUTED from indirect clues: relative times in content ("12h ago")
+     against capture metadata; relative phrases in the owner's note ("last Thursday" —
      resolve against the upload date); references to datable events; corroboration from
      the other records of this module provided below. More independent clues -> higher.
    - 2-5: weak inference — rough era/season guesses from soft context.
-   - 1: NO usable context at all; falling back to file metadata (EXIF) or upload time.
+   - 1: NO usable evidence at all; falling back to file metadata (EXIF) or upload time.
      Set source "metadata" or "upload". This is a flagged, untrusted date.
+   The owner's context note is direct testimony from the person who was there — treat a
+   date it states as fact (9-10), not as a clue to be discounted.
    Rules:
    - HOUR AND MINUTE ONLY IF EVIDENCED. If the content shows a time, include it.
      Otherwise return midnight (T00:00:00) — the UI treats midnight as date-only.
@@ -539,9 +545,11 @@ def apply_analysis(record_id: str, result: dict, manual_ts: Optional[str]):
         ts = result.get("timestamp")
         src = result.get("timestamp_source", "upload")
         try:
-            score = max(1, min(10, int(result.get("timestamp_score") or 1)))
+            score = max(1, min(10, int(result.get("timestamp_score"))))
         except Exception:
-            score = 1
+            # model omitted the numeric score — derive a fair one, never punish to 1
+            conf = result.get("timestamp_confidence", "")
+            score = {"exact": 9, "approximate": 7}.get(conf, 5 if src == "content" else 1)
         if src in ("metadata", "upload"):
             score = 1
         if ts and src in ("content", "metadata"):
