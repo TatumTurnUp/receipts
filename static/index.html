@@ -767,7 +767,11 @@ async function openSettings(){
 }
 async function restartApp(){
   if(!confirm("Restart the app? Takes a few seconds — your data is untouched. Use this after an update to load new code.")) return;
-  try{ await jpost("/restart",{}); }catch(e){}
+  try{ await jpost("/restart",{}); }
+  catch(e){
+    toast("⚠️ The running server is on old code and doesn't understand the restart command. One-time fix in a terminal: <b>fuser -k 8765/tcp</b> — then relaunch from your icon.", 12000);
+    return;
+  }
   document.body.style.opacity=.4;
   toast("<span class='spin'></span>Restarting…",6000);
   const t0=Date.now();
