@@ -414,15 +414,35 @@ Your job:
      (overlapping conversations, same events). Cite them in your reasoning if used.
 3. Suggest a short title, tags, and any people/places/entities mentioned.
 
-Reply with ONLY a JSON object:
+Reply with ONLY a JSON object. EVERY field below is REQUIRED — never omit any of them.
+timestamp_score is the most important field in this system; if timestamp is not null,
+timestamp_score MUST be an integer 1-10 (if timestamp is null, use 1):
 {
- "title": str, "description": str, "extracted_text": str,
  "timestamp": str|null (ISO 8601, e.g. "2017-03-03T00:00:00"),
+ "timestamp_score": int,
  "timestamp_source": "content"|"metadata"|"upload",
- "timestamp_score": int 1-10,
  "timestamp_reasoning": str,
+ "title": str, "description": str, "extracted_text": str,
  "tags": [str], "entities": [str]
 }"""
+
+SCORE_FOLLOWUP_SYSTEM = """You scored nothing yet. Given how an archive item's date was
+determined, output its confidence score on this scale:
+10 = date stated by a primary source (visible in content, or the owner's context note
+     states it AND another signal corroborates); 9 = stated by one source, uncorroborated;
+6-8 = computed from indirect clues (relative times vs metadata, datable events,
+     sibling records); 2-5 = weak inference; 1 = metadata/upload fallback only.
+Reply ONLY with JSON: {"timestamp_score": int}"""
+
+
+def score_followup(result: dict, user_context: str) -> int:
+    """The model omitted timestamp_score — ask it to score its own reasoning."""
+    payload = (f"Timestamp: {result.get('timestamp')}\n"
+               f"Source: {result.get('timestamp_source')}\n"
+               f"Owner's context note: {user_context or '(none)'}\n"
+               f"Dating reasoning: {result.get('timestamp_reasoning','')}")
+    raw = call_claude(SCORE_FOLLOWUP_SYSTEM, [{"type": "text", "text": payload}], max_tokens=100)
+    return max(1, min(10, int(parse_json_block(raw).get("timestamp_score"))))
 
 
 def get_module_row(mid: str) -> Optional[dict]:
@@ -547,9 +567,13 @@ def apply_analysis(record_id: str, result: dict, manual_ts: Optional[str]):
         try:
             score = max(1, min(10, int(result.get("timestamp_score"))))
         except Exception:
-            # model omitted the numeric score — derive a fair one, never punish to 1
-            conf = result.get("timestamp_confidence", "")
-            score = {"exact": 9, "approximate": 7}.get(conf, 5 if src == "content" else 1)
+            # model omitted the numeric score — ask it to score its own reasoning
+            try:
+                score = score_followup(result, r["user_context"])
+                result["timestamp_score"] = score  # keep ai_json truthful
+            except Exception:
+                conf = result.get("timestamp_confidence", "")
+                score = {"exact": 9, "approximate": 7}.get(conf, 6 if src == "content" else 1)
         if src in ("metadata", "upload"):
             score = 1
         if ts and src in ("content", "metadata"):
