@@ -32,7 +32,11 @@ holds their irreplaceable personal archive. Convenience never outranks preservat
 - Single-file FastAPI backend (`app.py`), single-file vanilla-JS frontend
   (`static/index.html`), SQLite + FTS5, storage on local disk.
 - Tables: `modules`, `records`, `records_fts` (+triggers), `amendments`
-  (AI cross-record context updates w/ feedback), `change_log` (audit trail,
+  (AI cross-record context updates; feedback semantics the owner chose:
+  👍 up = keep the change + remember as correct; 😐 neutral = revert but do NOT
+  count against the AI; 👎 down = revert + remember as a mistake. Approved
+  amendments lose the highlight but keep the dashed underline + hover tooltip),
+  `change_log` (audit trail,
   carries `module_id` + `entity_label` so entries survive record deletion).
 - Naming convention the owner chose — use it everywhere, don't invent new terms:
   "System Audit Log" (all changes, sidebar page), "Module Audit Log" (floating
