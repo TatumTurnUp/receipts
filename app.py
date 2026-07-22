@@ -1161,7 +1161,7 @@ def module_records(mid: str):
 
 
 @app.post("/api/upload")
-async def upload(
+def upload(  # sync on purpose: runs in the threadpool so long AI calls never block other requests
     module_id: str = Form(...),
     file: UploadFile = File(...),
     user_context: str = Form(""),
@@ -1404,16 +1404,17 @@ def amendment_feedback(aid: str, f: FeedbackIn):
     if not a:
         conn.close()
         raise HTTPException(404, "Amendment not found")
-    if f.verdict == "down":
-        # reverse the change
+    if f.verdict in ("down", "neutral"):
+        # both revert the change; only 'down' is remembered as a mistake in future prompts
         conn.execute("UPDATE records SET description=? WHERE id=?",
                      (a["old_description"], a["target_record_id"]))
-        conn.execute("UPDATE amendments SET verdict='down', status='reversed' WHERE id=?", (aid,))
+        conn.execute("UPDATE amendments SET verdict=?, status='reversed' WHERE id=?",
+                     (f.verdict, aid))
     else:
-        conn.execute("UPDATE amendments SET verdict=? WHERE id=?", (f.verdict, aid))
+        conn.execute("UPDATE amendments SET verdict='up' WHERE id=?", (aid,))
     conn.commit()
     conn.close()
-    if f.verdict == "down":
+    if f.verdict in ("down", "neutral"):
         tmid, tlbl = "", ""
         try:
             trec = get_record(a["target_record_id"])
@@ -1422,9 +1423,10 @@ def amendment_feedback(aid: str, f: FeedbackIn):
             pass
         log_change("record", a["target_record_id"], "description",
                    a["new_description"], a["old_description"],
-                   note="You rejected an AI amendment — change reversed",
+                   note="You rejected an AI amendment — change reversed" if f.verdict == "down"
+                   else "You reverted an AI amendment (neutral — not held against the AI)",
                    module_id=tmid, label=tlbl)
-    return {"ok": True, "reversed": f.verdict == "down"}
+    return {"ok": True, "reversed": f.verdict in ("down", "neutral")}
 
 
 @app.get("/api/audit")
