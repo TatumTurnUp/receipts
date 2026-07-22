@@ -173,6 +173,18 @@ h2{font-size:16px;margin:22px 0 10px}
 .s-g{background:rgba(76,195,138,.18);color:var(--green);border:1px solid rgba(76,195,138,.4)}
 .tl-sec{color:var(--dim);font-size:11px;margin-top:1px}
 
+/* global upload queue widget */
+#uq{position:fixed;left:262px;bottom:22px;z-index:45;width:330px;background:var(--bg2);border:1px solid var(--line);border-radius:12px;box-shadow:0 10px 28px rgba(0,0,0,.5);overflow:hidden}
+#uq-bar{padding:10px 14px 8px;cursor:pointer;font-size:13px;font-weight:600}
+#uq-prog{height:3px;background:var(--bg3);border-radius:2px;margin-top:8px;overflow:hidden}
+#uq-prog-fill{height:100%;background:var(--accent);width:0%;transition:width .3s}
+#uq-list{max-height:260px;overflow-y:auto;border-top:1px solid var(--line);padding:6px 10px}
+.uq-row{display:flex;align-items:center;gap:8px;padding:6px 2px;font-size:12.5px;border-bottom:1px solid var(--line)}
+.uq-row:last-child{border-bottom:none}
+.uq-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.uq-mod{color:var(--accent2);font-size:11.5px;white-space:nowrap}
+.uq-err{color:var(--red);font-size:11px;margin-top:1px}
+
 /* module audit widget */
 #maudit{position:fixed;right:22px;bottom:22px;z-index:40}
 #maudit-fab{background:var(--bg3);border:1px solid var(--line);border-radius:24px;padding:9px 16px;font-weight:600;box-shadow:0 6px 18px rgba(0,0,0,.4)}
@@ -276,6 +288,15 @@ h2{font-size:16px;margin:22px 0 10px}
     <div class="sub">Every change across every module — uploads, edits, AI updates, deletions. Append-only; nothing is ever erased from this trail.</div>
     <div id="audit-list" style="margin-top:16px"></div>
   </div>
+</div>
+
+<!-- GLOBAL UPLOAD QUEUE widget (Google Drive style) -->
+<div id="uq" class="hidden">
+  <div id="uq-bar" onclick="toggleUq()">
+    <span id="uq-head"></span>
+    <div id="uq-prog"><div id="uq-prog-fill"></div></div>
+  </div>
+  <div id="uq-list" class="hidden"></div>
 </div>
 
 <!-- MODULE AUDIT LOG floating widget -->
@@ -691,8 +712,85 @@ async function deleteModule(){
   showHome();
 }
 
-/* ---------------- upload ---------------- */
-let uFiles=[]; // {file, key, status: queued|uploading|done|error, error, ctrl, url}
+/* ---------------- global upload queue (Google Drive style) ---------------- */
+let uq=[], uqKey=0, uqRunning=false, uqOpen=false, uqTimer=null;
+
+function enqueueUploads(items){ uq.push(...items); renderUq(); processUq(); }
+
+async function processUq(){
+  if(uqRunning) return;
+  uqRunning=true;
+  while(true){
+    const item = uq.find(i=>i.status==="queued");
+    if(!item) break;
+    await uqUpload(item);
+  }
+  uqRunning=false;
+  renderUq();
+  if(uq.length && uq.every(i=>i.status==="done")){
+    clearTimeout(uqTimer);
+    uqTimer=setTimeout(()=>{ uq=[]; uqOpen=false; renderUq(); }, 7000);
+  }
+}
+async function uqUpload(item){
+  item.status="uploading"; item.ctrl=new AbortController(); renderUq();
+  const fd=new FormData();
+  fd.append("module_id", item.moduleId);
+  fd.append("file", item.file);
+  fd.append("user_context", item.ctx);
+  fd.append("include_date", item.dated? "1":"0");
+  if(item.ts && item.dated) fd.append("manual_timestamp", item.ts);
+  try{
+    const r=await api("/upload",{method:"POST",body:fd,signal:item.ctrl.signal});
+    item.status="done"; item.amended=r.amended||0; item.aiError=r.ai_error||null;
+  }catch(e){
+    item.status="error";
+    item.error = e.name==="AbortError"? "Canceled by you." : (e.message||"Upload failed — is the app still running?");
+  }
+  item.ctrl=null; renderUq();
+  if(item.status==="done"){
+    loadModules();
+    if(state.moduleId===item.moduleId) refreshRecords();
+  }
+}
+function uqCancel(key){ const i=uq.find(i=>i.key===key); if(i?.ctrl) i.ctrl.abort(); }
+function uqRetry(key){ const i=uq.find(i=>i.key===key); if(i){i.status="queued";i.error=null;} renderUq(); processUq(); }
+function uqRemove(key){ uq=uq.filter(i=>i.key!==key); renderUq(); }
+function toggleUq(){ uqOpen=!uqOpen; renderUq(); }
+
+function renderUq(){
+  const w=$("uq"); if(!w) return;
+  if(!uq.length){ w.classList.add("hidden"); return; }
+  w.classList.remove("hidden");
+  const total=uq.length,
+        done=uq.filter(i=>i.status==="done").length,
+        err=uq.filter(i=>i.status==="error").length,
+        finished=done+err,
+        active=finished<total;
+  $("uq-head").innerHTML = active
+    ? `<span class="spin"></span>Uploading ${Math.min(finished+1,total)} of ${total}…`
+    : err? `⚠️ ${done} uploaded, ${err} failed`
+    : `✓ ${done} upload${done>1?"s":""} complete`;
+  $("uq-prog-fill").style.width = (finished/total*100)+"%";
+  const list=$("uq-list");
+  list.classList.toggle("hidden", !uqOpen);
+  if(uqOpen){
+    list.innerHTML = uq.map(i=>{
+      let st="", btns="";
+      if(i.status==="queued"){ st=`<span class="sub">waiting</span>`; btns=`<button class="icon-btn" onclick="uqRemove(${i.key})">✕</button>`; }
+      if(i.status==="uploading"){ st=`<span class="spin"></span>`; btns=`<button class="icon-btn" title="Cancel" onclick="uqCancel(${i.key})">✕</button>`; }
+      if(i.status==="done"){ st=`<span style="color:var(--green)">✓${i.amended?" ✎"+i.amended:""}${i.aiError?" ⚠":""}</span>`; }
+      if(i.status==="error"){ st=`<span style="color:var(--red)">failed</span>`;
+        btns=`<button class="icon-btn" title="Retry" onclick="uqRetry(${i.key})">🔁</button><button class="icon-btn" onclick="uqRemove(${i.key})">✕</button>`; }
+      return `<div class="uq-row">
+        <div class="uq-name">${esc(i.name)}${i.status==="error"?`<div class="uq-err">${esc(i.error||"")}</div>`:""}${i.aiError?`<div class="uq-err">saved, AI analysis failed — open & Re-analyze</div>`:""}</div>
+        <span class="uq-mod">→ ${esc(i.moduleName)}</span>${st}${btns}</div>`;
+    }).join("");
+  }
+}
+
+/* ---------------- upload staging modal ---------------- */
+let uFiles=[]; // staged before entering the queue: {file, key, url}
 let uKey=0;
 
 function openUpload(){
@@ -727,85 +825,34 @@ function renderUZone(){
   } else {
     html = uFiles.map(f=>{
       const thumb = f.url? `<img src="${f.url}">` : (KIND_ICON[f.file.type.split("/")[0]]||"📄");
-      let status="", btns="";
-      if(f.status==="queued"){ status=`<span class="file-status st-queued">ready</span>`;
-        btns=`<button class="icon-btn" title="Remove" onclick="uRemove(${f.key})">✕</button>`; }
-      if(f.status==="uploading"){ status=`<span class="file-status st-uploading"><span class="spin"></span>uploading…</span>`;
-        btns=`<button class="icon-btn" title="Cancel" onclick="uCancel(${f.key})">✕</button>`; }
-      if(f.status==="done"){ status=`<span class="file-status st-done">✓ done${f.amended?` · updated ${f.amended} earlier record${f.amended>1?"s":""}`:""}</span>`; }
-      if(f.status==="error"){ status=`<span class="file-status st-error">failed</span>`;
-        btns=`<button class="icon-btn" title="Retry" onclick="uRetry(${f.key})">🔁</button>
-              <button class="icon-btn" title="Remove" onclick="uRemove(${f.key})">✕</button>`; }
       return `<div class="file-row"><div class="file-thumb">${thumb}</div>
-        <div style="flex:1;min-width:0"><div class="file-name">${esc(f.file.name)}</div>
-          ${f.status==="error"?`<div class="file-err">${esc(f.error||"")}</div>`:""}</div>
-        ${status}${btns}</div>`;
+        <div class="file-name">${esc(f.file.name)}</div>
+        <button class="icon-btn" title="Remove" onclick="uRemove(${f.key})">✕</button></div>`;
     }).join("") +
     `<div class="drop compact" id="u-drop" onclick="$('u-file').click()" style="margin-top:8px">＋ Add more files (or drop here)</div>`;
   }
   zone.innerHTML=html;
   const d=$("u-drop"); if(d) bindDrop(d);
-  const pending = uFiles.filter(f=>f.status==="queued"||f.status==="error").length;
   const go=$("u-go");
-  if(go && !state.uploading){ go.textContent = pending? `⬆ Upload ${pending} file${pending>1?"s":""}` : "Upload"; go.disabled=!pending; }
+  if(go){ go.textContent = uFiles.length? `⬆ Upload ${uFiles.length} file${uFiles.length>1?"s":""}` : "Upload"; go.disabled=!uFiles.length; }
 }
 function uAdd(files){
   for(const f of files){
-    const item={file:f, key:++uKey, status:"queued", error:null, ctrl:null,
-      url: f.type.startsWith("image/")? URL.createObjectURL(f):null};
-    uFiles.push(item);
+    uFiles.push({file:f, key:++uKey, url: f.type.startsWith("image/")? URL.createObjectURL(f):null});
   }
   renderUZone();
 }
 function uRemove(key){ uFiles=uFiles.filter(f=>f.key!==key); renderUZone(); }
-function uCancel(key){ const f=uFiles.find(f=>f.key===key); if(f?.ctrl) f.ctrl.abort(); }
-function uRetry(key){ const f=uFiles.find(f=>f.key===key); if(f){f.status="queued";f.error=null;} renderUZone(); doUpload(); }
 
-async function uploadOne(f, ctx, ts){
-  f.status="uploading"; f.ctrl=new AbortController(); renderUZone();
-  const fd=new FormData();
-  fd.append("module_id", state.moduleId);
-  fd.append("file", f.file);
-  fd.append("user_context", ctx);
-  fd.append("include_date", $("u-dated").checked? "1":"0");
-  if(ts && $("u-dated").checked) fd.append("manual_timestamp", ts);
-  try{
-    const r=await api("/upload",{method:"POST",body:fd,signal:f.ctrl.signal});
-    f.status="done"; f.amended=r.amended||0;
-    if(r.ai_error){
-      // file is saved (retrying would duplicate it) — analysis just failed
-      toast("⚠️ "+esc(f.file.name)+": saved, but AI analysis failed ("+esc(r.ai_error.slice(0,100))+"). Open it and hit Re-analyze.",7000);
-    }
-  }catch(e){
-    f.status="error";
-    f.error = e.name==="AbortError"? "Canceled by you." : (e.message||"Upload failed — is the app still running?");
-  }
-  f.ctrl=null; renderUZone();
-}
-async function doUpload(){
-  if(state.uploading) return;
-  const queue = uFiles.filter(f=>f.status==="queued");
-  if(!queue.length) return;
-  state.uploading=true;
-  const go=$("u-go"); go.disabled=true; go.innerHTML=`<span class="spin"></span>Uploading…`;
-  const ctx=$("u-ctx").value, ts=readDateInput("u");
-  for(const f of queue){
-    if(f.status!=="queued") continue;
-    await uploadOne(f, ctx, ts);
-  }
-  state.uploading=false;
-  const errs=uFiles.filter(f=>f.status==="error").length;
-  const done=uFiles.filter(f=>f.status==="done").length;
-  const amended=uFiles.reduce((n,f)=>n+(f.amended||0),0);
-  renderUZone();
-  refreshRecords(); loadModules();
-  if(!errs){
-    closeModal();
-    toast(`Uploaded ${done} file${done>1?"s":""}.`+(amended?` ✎ AI updated ${amended} earlier record${amended>1?"s":""} with new context — look for the highlights.`:""), amended?7000:3000);
-  } else {
-    const go2=$("u-go"); if(go2){go2.disabled=false; go2.textContent="Upload";}
-    toast(`${done} uploaded, ${errs} failed — see details in the list.`,6000);
-  }
+function doUpload(){
+  if(!uFiles.length) return;
+  const ctx=$("u-ctx").value, dated=$("u-dated").checked, ts=dated? readDateInput("u"):null;
+  enqueueUploads(uFiles.map(f=>({
+    key:++uqKey, file:f.file, name:f.file.name,
+    moduleId:state.moduleId, moduleName:state.module.name,
+    ctx, ts, dated, status:"queued", error:null, ctrl:null
+  })));
+  uFiles=[]; closeModal();
 }
 
 /* ---------------- note / link / moment ---------------- */
@@ -889,21 +936,38 @@ async function openDetail(id){
         ${scoreChip(r)} <span class="badge b-${r.ts_source}">${SRC_LABEL[r.ts_source]} · ${fmtTs(r.ts_effective)}</span>
         <span class="sub">confidence ${r.ts_score||1}/10 · uploaded ${fmtTs(r.created_at)}</span></div>
        ${r.ts_reasoning? `<div class="kv sub">↳ ${esc(r.ts_reasoning)}</div>`:""}`;
+  const dateEditor = r.ts_source==="none"
+    ? `<label class="chk" style="margin-top:10px"><input type="checkbox" id="d-dated"
+         onchange="$('d-datewrap').classList.toggle('hidden', !this.checked)"> Include date</label>
+       <div id="d-datewrap" class="hidden">${dateInputHtml("d")}
+         <div class="row" style="margin-top:8px"><button class="btn" onclick="setManualTs('${r.id}')">Set date</button></div>
+       </div>`
+    : `<label>Fix the timeline date</label>
+       ${dateInputHtml("d")}
+       <div class="row" style="margin-top:8px">
+         <button class="btn" onclick="setManualTs('${r.id}')">Set date</button>
+         ${r.ts_source==="manual"? `<button class="btn" onclick="clearManualTs('${r.id}')">Remove manual date</button>`:""}
+       </div>`;
+  // order: your context -> the content itself -> the AI's work
+  const isUserText = r.kind==="note"||r.kind==="moment";
+  const contentBlock =
+    r.kind==="link" ? `<div class="kv"><b>Link:</b> <a href="${esc(r.body)}" target="_blank">${esc(r.body)}</a></div>${linkPreviewHtml(r)}`
+    : isUserText ? (r.body? `<div class="kv"><b>Content:</b></div><div class="mono">${esc(r.body)}</div>`:"")
+    : img;
+  const extractedBlock = (!isUserText && r.kind!=="link" && r.body)
+    ? `<div class="kv"><b>Extracted text (AI):</b></div><div class="mono">${esc(r.body)}</div>` : "";
+  const aiErrBox = (r.ai && r.ai.error)
+    ? `<div class="flag" style="border-color:rgba(229,83,75,.5);background:rgba(229,83,75,.08)">⚠️ AI analysis failed: ${esc(r.ai.error.slice(0,200))} — hit <b>Re-analyze</b> below.</div>` : "";
   modal(`<h3>${esc(r.title||r.original_name||"Record")}</h3>
-    ${img}
-    ${r.user_context? `<div class="ctx-box"><b>Your context:</b> ${esc(r.user_context)}<div class="sub" style="margin-top:3px">Everything below is the AI's read of the item.</div></div>`:""}
+    ${r.user_context? `<div class="ctx-box"><b>Your context:</b> ${esc(r.user_context)}</div>`:""}
+    ${contentBlock}
+    ${aiErrBox}
     ${r.description? `<div class="kv"><b>Summary:</b> ${descWithAmends(r)}</div>`:""}
     ${srcFlags}
-    ${linkPreviewHtml(r)}
-    ${r.body? `<div class="kv"><b>${r.kind==="link"?"Link":"Content"}:</b></div><div class="mono">${r.kind==="link"?`<a href="${esc(r.body)}" target="_blank">${esc(r.body)}</a>`:esc(r.body)}</div>`:""}
+    ${extractedBlock}
     ${r.tags?.length? `<div class="kv"><b>Tags:</b> ${r.tags.map(esc).join(", ")}</div>`:""}
     ${dateRow}
-    <label>${r.ts_source==="none"?"Add a timeline date":"Fix the timeline date"}</label>
-    ${dateInputHtml("d")}
-    <div class="row" style="margin-top:8px">
-      <button class="btn" onclick="setManualTs('${r.id}')">Set date</button>
-      ${r.ts_source==="manual"? `<button class="btn" onclick="clearManualTs('${r.id}')">Remove manual date</button>`:""}
-    </div>
+    ${dateEditor}
     <div class="m-actions">
       <button class="btn danger" onclick="deleteRecord('${r.id}')">Delete</button>
       <button class="btn" onclick="openHistory('${r.id}')">📜 Audit Log</button>
