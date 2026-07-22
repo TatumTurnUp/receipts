@@ -362,7 +362,7 @@ def ai_available() -> bool:
     return bool(load_config().get("anthropic_api_key"))
 
 
-def call_claude(system: str, user_content, max_tokens: int = 1500) -> str:
+def call_claude(system: str, user_content, max_tokens: int = 1500, timeout: int = 120) -> str:
     cfg = load_config()
     key = cfg.get("anthropic_api_key")
     if not key:
@@ -380,7 +380,7 @@ def call_claude(system: str, user_content, max_tokens: int = 1500) -> str:
             "system": system,
             "messages": [{"role": "user", "content": user_content}],
         },
-        timeout=120,
+        timeout=timeout,
     )
     if resp.status_code != 200:
         raise RuntimeError(f"Anthropic API error {resp.status_code}: {resp.text[:300]}")
@@ -578,12 +578,30 @@ def analyze_record(record: dict, file_path: Optional[Path]) -> dict:
                 "type": "image",
                 "source": {"type": "base64", "media_type": mime or "image/png", "data": b64},
             })
-        elif mime == "application/pdf" and size <= 15_000_000:
-            b64 = base64.b64encode(file_path.read_bytes()).decode()
-            content.append({
-                "type": "document",
-                "source": {"type": "base64", "media_type": "application/pdf", "data": b64},
-            })
+        elif mime == "application/pdf":
+            # The API caps PDFs (~100 pages / size). Send the raw document when it
+            # fits; otherwise fall back to locally extracted text.
+            pages = None
+            try:
+                from pypdf import PdfReader
+                pages = len(PdfReader(str(file_path)).pages)
+            except Exception:
+                pass
+            if size <= 15_000_000 and (pages is None or pages <= 90):
+                b64 = base64.b64encode(file_path.read_bytes()).decode()
+                content.append({
+                    "type": "document",
+                    "source": {"type": "base64", "media_type": "application/pdf", "data": b64},
+                })
+            else:
+                try:
+                    from pypdf import PdfReader
+                    reader = PdfReader(str(file_path))
+                    text = "\n".join((p.extract_text() or "") for p in reader.pages[:150])
+                    meta += (f"\n\nThis PDF is too large to attach ({pages} pages). "
+                             f"Extracted text (first 150 pages):\n" + text[:30_000])
+                except Exception as e:
+                    meta += f"\n\n(PDF too large to attach and text extraction failed: {e})"
         elif mime in ANALYZABLE_TEXT_MIMES and size <= 2_000_000:
             try:
                 meta += "\n\nFile contents:\n" + file_path.read_text(errors="replace")[:20_000]
@@ -595,8 +613,23 @@ def analyze_record(record: dict, file_path: Optional[Path]) -> dict:
                  "Focus on the description, extracted text, and tags.")
     content.append({"type": "text", "text": f"Item metadata:\n{meta}\n\nAnalyze this item."})
 
-    raw = call_claude(ANALYZE_SYSTEM, content)
-    return parse_json_block(raw)
+    raw = call_claude(ANALYZE_SYSTEM, content, timeout=300)
+    result = parse_json_block(raw)
+    if not result:
+        raise RuntimeError(f"AI returned unparseable output: {raw[:200]}")
+    return result
+
+
+def persist_ai_error(record_id: str, error: str):
+    """Store an analysis failure on the record so it's visible, not just a toast."""
+    try:
+        conn = db()
+        conn.execute("UPDATE records SET ai_json=? WHERE id=? AND ai_json='{}'",
+                     (json.dumps({"error": error[:500]}), record_id))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
 
 
 def apply_analysis(record_id: str, result: dict, manual_ts: Optional[str]):
@@ -1167,6 +1200,7 @@ async def upload(
                 pass
         except Exception as e:
             ai_error = str(e)
+            persist_ai_error(rid, ai_error)
 
     out = get_record(rid)
     out["ai_error"] = ai_error
@@ -1307,6 +1341,7 @@ def reanalyze(rid: str):
         result = analyze_record(rec, path)
         apply_analysis(rid, result, None if rec["ts_source"] != "manual" else "keep")
     except Exception as e:
+        persist_ai_error(rid, str(e))
         raise HTTPException(502, f"AI analysis failed: {e}")
     return get_record(rid)
 
