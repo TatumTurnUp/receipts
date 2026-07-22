@@ -48,6 +48,12 @@ holds their irreplaceable personal archive. Convenience never outranks preservat
   legacy — keep it populated for compatibility, but ts_score is the truth.
 - Timeline sorting: module timelines sort by content date or upload date
   (`created_at`); both dates always shown (primary large, secondary faint).
+- Dating is optional: `ts_source='none'` + NULL `ts_effective` means the owner
+  opted out (spec sheets etc.) — no score chip, timeline placement falls back
+  to upload date. Record kinds: image|video|audio|file|note|link|moment.
+  Notes (yellow), links (blue), moments (orange) are tinted in timeline/cards;
+  links carry og: preview data in `link_meta`. PDFs and text files are analyzed
+  (document blocks / inline text), not just images.
 - AI layer is intentionally thin: `call_claude()` in app.py is the ONLY place
   that talks to a model. Anthropic API today.
 
