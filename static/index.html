@@ -1002,9 +1002,11 @@ async function clearManualTs(id){
 }
 async function reanalyze(id){
   const b=$("d-rean"); b.disabled=true; b.innerHTML=`<span class="spin"></span>Analyzing…`;
-  try{ await jpost("/records/"+id+"/reanalyze",{}); closeModal(); toast("Re-analyzed ✓");
-    state.moduleId? refreshRecords() : showHome();
-  }catch(e){ toast("Failed: "+esc(e.message)); b.disabled=false; b.textContent="🔁 Re-analyze with AI"; }
+  try{ await jpost("/records/"+id+"/reanalyze",{}); toast("Re-analyzed ✓"); }
+  catch(e){ toast("Re-analyze failed: "+esc(e.message), 6000); }
+  // always reload the record in place so results OR the error banner show immediately
+  closeModal(); openDetail(id);
+  state.moduleId? refreshRecords() : showHome();
 }
 async function deleteRecord(id){
   if(!confirm("Delete this record?")) return;
