@@ -964,8 +964,9 @@ async function openDetail(id){
     r.kind==="link" ? `<div class="kv"><b>Link:</b> <a href="${esc(r.body)}" target="_blank">${esc(r.body)}</a></div>${linkPreviewHtml(r)}`
     : isUserText ? (r.body? `<div class="kv"><b>Content:</b></div><div class="mono">${esc(r.body)}</div>`:"")
     : img;
-  const extractedBlock = (!isUserText && r.kind!=="link" && r.body)
-    ? `<div class="kv"><b>Extracted text (AI):</b></div><div class="mono">${esc(r.body)}</div>` : "";
+  // extracted text is kept for search indexing but not displayed — the summary
+  // plus the item itself (image/file link) is what the owner reads
+  const extractedBlock = "";
   const aiErrBox = (r.ai && r.ai.error)
     ? `<div class="flag" style="border-color:rgba(229,83,75,.5);background:rgba(229,83,75,.08)">⚠️ AI analysis failed: ${esc(r.ai.error.slice(0,200))} — hit <b>Re-analyze</b> below.</div>` : "";
   modal(`<h3>${esc(r.title||r.original_name||"Record")}</h3>
