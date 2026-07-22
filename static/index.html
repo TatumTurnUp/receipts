@@ -150,6 +150,22 @@ h2{font-size:16px;margin:22px 0 10px}
 .fb button{background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:2px 8px;font-size:13px}
 .fb button:hover{border-color:var(--accent2)}
 
+/* kind tints in timeline (notepad yellow, link blue, moment orange) */
+.tl-item.k-note{background:rgba(232,182,76,.10);border-color:rgba(232,182,76,.35)}
+.tl-item.k-link{background:rgba(91,141,239,.10);border-color:rgba(91,141,239,.35)}
+.tl-item.k-moment{background:rgba(240,140,60,.12);border-color:rgba(240,140,60,.45)}
+.card.k-note{background:rgba(232,182,76,.07)}
+.card.k-link{background:rgba(91,141,239,.07)}
+.card.k-moment{background:rgba(240,140,60,.08)}
+
+/* link preview card */
+.lprev{display:flex;gap:10px;align-items:center;background:var(--bg3);border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin-top:6px;cursor:pointer}
+.lprev img{width:52px;height:52px;object-fit:cover;border-radius:7px;flex-shrink:0}
+.lprev .lp-t{font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.lprev .lp-s{color:var(--dim);font-size:11px;margin-top:2px}
+.ctx-box{background:rgba(91,141,239,.08);border:1px solid rgba(91,141,239,.3);border-radius:10px;padding:10px 12px;font-size:13px;margin:6px 0 12px}
+.ctx-box b{color:var(--accent2)}
+
 /* timestamp confidence score */
 .score{display:inline-flex;align-items:center;justify-content:center;min-width:21px;height:19px;border-radius:6px;font-size:11px;font-weight:800;padding:0 4px;cursor:help}
 .s-r{background:rgba(229,83,75,.18);color:var(--red);border:1px solid rgba(229,83,75,.4)}
@@ -248,6 +264,7 @@ h2{font-size:16px;margin:22px 0 10px}
       <button class="btn primary" onclick="openUpload()">⬆ Upload files</button>
       <button class="btn" onclick="openNote('note')">✏️ Add note</button>
       <button class="btn" onclick="openNote('link')">🔗 Add link</button>
+      <button class="btn" onclick="openNote('moment')">⭐ Add moment</button>
     </div>
     <div id="mod-records" class="grid"></div>
     <div id="mod-timeline" class="hidden"></div>
@@ -276,7 +293,7 @@ h2{font-size:16px;margin:22px 0 10px}
 <script>
 const ICONS = {person:"👤", event:"📅", place:"📍", project:"🛠️", generic:"📁"};
 const GROUPS = {person:"People", event:"Events", place:"Places", project:"Projects", generic:"Other"};
-const KIND_ICON = {image:"🖼️", video:"🎬", audio:"🎧", link:"🔗", note:"📝", file:"📄"};
+const KIND_ICON = {image:"🖼️", video:"🎬", audio:"🎧", link:"🔗", note:"📝", moment:"⭐", file:"📄"};
 const PRESET_FIELDS = {
   person:  ["Relationship","How we met"],
   event:   ["When","Where"],
@@ -298,7 +315,7 @@ const NOTES_PLACEHOLDER = {
   project: "Describe the project and what counts as progress.\ne.g. \"Everything related to the kitchen remodel — quotes, contractor texts, receipts\"",
   generic: "Describe what belongs in this module so the AI can file and search it well.\ne.g. \"Anything related to my car — repairs, insurance, the accident in March\""
 };
-const SRC_LABEL = {manual:"📌 manual", content:"🔍 from content", metadata:"🗂 from metadata", upload:"⬆ upload time"};
+const SRC_LABEL = {manual:"📌 manual", content:"🔍 from content", metadata:"🗂 from metadata", upload:"⬆ upload time", none:"no date"};
 const MODELS = [
   ["claude-opus-4-8","Opus — most careful, most expensive"],
   ["claude-sonnet-5","Sonnet — fast + smart (default)"],
@@ -461,20 +478,33 @@ function thumbHtml(r, cls){
   return `<div class="${cls}">${KIND_ICON[r.kind]||"📄"}</div>`;
 }
 function cardHtml(r){
-  const badge = `${scoreChip(r)} <span class="badge b-${r.ts_source}">${SRC_LABEL[r.ts_source]||r.ts_source} · ${fmtTs(r.ts_effective)}</span>`;
+  const badge = r.ts_source==="none"
+    ? `<span class="badge b-upload">uploaded ${fmtTs(r.created_at)}</span>`
+    : `${scoreChip(r)} <span class="badge b-${r.ts_source}">${SRC_LABEL[r.ts_source]||r.ts_source} · ${fmtTs(r.ts_effective)}</span>`;
   const amendBadge = (r.amendments_target?.length)? ` <span class="badge b-amend">✎ updated</span>` : "";
-  return `<div class="card" onclick="openDetail('${r.id}')">
+  const kcls = ["note","link","moment"].includes(r.kind)? " k-"+r.kind : "";
+  return `<div class="card${kcls}" onclick="openDetail('${r.id}')">
     ${thumbHtml(r,"thumb")}
     <div class="cbody">
       <div class="ct">${esc(r.title||r.original_name||(r.body||"").slice(0,60)||"Untitled")}</div>
       <div class="cd">${esc(r.description||r.body||"")}</div>
+      ${linkPreviewHtml(r)}
       ${badge}${amendBadge}${r.why_related?`<div class="why">↳ ${esc(r.why_related)}</div>`:""}
     </div></div>`;
 }
 function scoreChip(r){
+  if(r.ts_source==="none" || !r.ts_effective) return "";
   const s = r.ts_score||1;
   const c = s>=9? "g" : s>=6? "y" : "r";
   return `<span class="score s-${c}" title="Timestamp confidence ${s}/10 — ${esc(r.ts_reasoning||"")}">${s}</span>`;
+}
+function linkPreviewHtml(r){
+  const m = r.link_meta||{};
+  if(r.kind!=="link" || !(m.title||m.image)) return "";
+  return `<div class="lprev" onclick="event.stopPropagation();window.open('${esc(r.body)}','_blank')">
+    ${m.image?`<img src="${esc(m.image)}" onerror="this.remove()">`:""}
+    <div style="min-width:0"><div class="lp-t">${esc(m.title||r.body)}</div>
+    <div class="lp-s">${esc(m.site||"")}${m.description?` — ${esc(m.description.slice(0,80))}`:""}</div></div></div>`;
 }
 function timelineHtml(items, showModule, sortBy="content"){
   if(!items.length) return `<div class="empty">Nothing on the timeline yet.</div>`;
@@ -493,15 +523,18 @@ function timelineHtml(items, showModule, sortBy="content"){
       const d=new Date(key(r));
       let time=isNaN(d)?"":d.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
       if(time==="12:00 AM") time="";
-      const sec = sortBy==="upload"
-        ? `content: ${fmtTs(r.ts_effective)}`
+      const dateless = r.ts_source==="none";
+      const sec = dateless? `no date — placed by upload time`
+        : sortBy==="upload"? `content: ${fmtTs(r.ts_effective)}`
         : `uploaded: ${fmtTs(r.created_at)}`;
-      html+=`<div class="tl-item" onclick="openDetail('${r.id}')">
+      const kcls = ["note","link","moment"].includes(r.kind)? " k-"+r.kind : "";
+      html+=`<div class="tl-item${kcls}" onclick="openDetail('${r.id}')">
         ${thumbHtml(r,"tl-thumb")}
-        <div class="tl-time">${sortBy==="content"?scoreChip(r)+" ":""}${time}<div class="tl-sec">${sec}</div></div>
-        <div style="flex:1">
+        <div class="tl-time">${sortBy==="content"?scoreChip(r)+" ":""}${dateless&&sortBy==="content"?"":time}<div class="tl-sec">${sec}</div></div>
+        <div style="flex:1;min-width:0">
           <div style="font-weight:600;font-size:13.5px">${esc(r.title||r.original_name||"Untitled")}</div>
           <div class="sub" style="overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical">${esc(r.description||r.body||"")}</div>
+          ${linkPreviewHtml(r)}
           ${showModule?`<div class="tl-mod">${esc(r.module_name||"")}</div>`:""}
         </div>
         <span class="badge b-${r.ts_source}">${SRC_LABEL[r.ts_source]||""}</span>
@@ -669,8 +702,13 @@ function openUpload(){
     <input type="file" id="u-file" multiple style="display:none" onchange="uAdd(this.files);this.value=''">
     <label>Context for the AI (optional but helps a lot)</label>
     <textarea id="u-ctx" rows="2" placeholder="e.g. Screenshot of texts between me and Laura from around March"></textarea>
-    <label>Date (optional — overrides everything; leave blank and the AI figures it out from content, "12h ago", EXIF…)</label>
-    ${dateInputHtml("u")}
+    <label class="chk" style="margin-top:12px"><input type="checkbox" id="u-dated" checked
+      onchange="$('u-datewrap').classList.toggle('hidden', !this.checked)"> Include date
+      <span class="sub">(uncheck for undated stuff like spec sheets — no timeline date, no confidence chip)</span></label>
+    <div id="u-datewrap">
+      <label>Manual date (optional — overrides everything; leave blank and the AI figures it out from content, "12h ago", EXIF…)</label>
+      ${dateInputHtml("u")}
+    </div>
     <div class="m-actions"><button class="btn" onclick="closeModal()">Close</button>
     <button class="btn primary" id="u-go" onclick="doUpload()">Upload</button></div>`);
   renderUZone();
@@ -729,7 +767,8 @@ async function uploadOne(f, ctx, ts){
   fd.append("module_id", state.moduleId);
   fd.append("file", f.file);
   fd.append("user_context", ctx);
-  if(ts) fd.append("manual_timestamp", ts);
+  fd.append("include_date", $("u-dated").checked? "1":"0");
+  if(ts && $("u-dated").checked) fd.append("manual_timestamp", ts);
   try{
     const r=await api("/upload",{method:"POST",body:fd,signal:f.ctrl.signal});
     f.status="done"; f.amended=r.amended||0;
@@ -769,15 +808,25 @@ async function doUpload(){
   }
 }
 
-/* ---------------- note / link ---------------- */
+/* ---------------- note / link / moment ---------------- */
+const NOTE_LABELS = {
+  note:  {title:"✏️ Add note",   body:"Text", ph:"Paste the text, quote, or memory here"},
+  link:  {title:"🔗 Add link",   body:"URL",  ph:"https://…"},
+  moment:{title:"⭐ Add moment", body:"What happened", ph:"A major event worth remembering — a move, a breakup, a launch, a first…"}
+};
 function openNote(kind){
-  modal(`<h3>Add ${kind==="link"?"link":"note"} to ${esc(state.module.name)}</h3>
+  const L = NOTE_LABELS[kind]||NOTE_LABELS.note;
+  modal(`<h3>${L.title} — ${esc(state.module.name)}</h3>
     <label>Title (optional)</label><input id="n-title">
-    <label>${kind==="link"?"URL":"Text"}</label>
-    ${kind==="link"?`<input id="n-body" placeholder="https://…">`:`<textarea id="n-body" rows="5" placeholder="Paste the text, quote, or memory here"></textarea>`}
+    <label>${L.body}</label>
+    ${kind==="link"?`<input id="n-body" placeholder="${L.ph}">`:`<textarea id="n-body" rows="5" placeholder="${L.ph}"></textarea>`}
     <label>Context (optional)</label><input id="n-ctx" placeholder="Where this came from, why it matters">
-    <label>Date (optional)</label>
-    ${dateInputHtml("n")}
+    <label class="chk" style="margin-top:12px"><input type="checkbox" id="n-dated" checked
+      onchange="$('n-datewrap').classList.toggle('hidden', !this.checked)"> Include date</label>
+    <div id="n-datewrap">
+      <label>Date (optional — defaults to today)</label>
+      ${dateInputHtml("n")}
+    </div>
     <div class="m-actions"><button class="btn" onclick="closeModal()">Cancel</button>
     <button class="btn primary" id="n-save" onclick="saveNote('${kind}')">Save</button></div>`);
 }
@@ -785,8 +834,10 @@ async function saveNote(kind){
   const body=$("n-body").value.trim(); if(!body){toast("Nothing to save");return;}
   const btn=$("n-save"); btn.disabled=true; btn.innerHTML=`<span class="spin"></span>Saving…`;
   try{
+    const dated=$("n-dated").checked;
     const r=await jpost("/notes",{module_id:state.moduleId, kind, title:$("n-title").value,
-      body, user_context:$("n-ctx").value, manual_timestamp: readDateInput("n")});
+      body, user_context:$("n-ctx").value, include_date:dated,
+      manual_timestamp: dated? readDateInput("n"):null});
     closeModal(); refreshRecords(); loadModules();
     if(r.amended) toast(`Saved. ✎ AI updated ${r.amended} earlier record${r.amended>1?"s":""} with new context.`,6000);
   }catch(e){ btn.disabled=false; btn.textContent="Save"; toast("Save failed: "+esc(e.message)); }
@@ -831,18 +882,23 @@ async function openDetail(id){
       <a href="#" onclick="closeModal();openDetail('${a.target_record_id}');return false">${esc(a.target_title||a.target_file||"another record")}</a>
       — ${esc(a.reason)} ${a.status==="reversed"?'<span class="sub">(reversed)</span>':`<span class="fb">${fbBtns(a)}</span>`}
     </div>`).join("");
+  const dateRow = r.ts_source==="none"
+    ? `<div class="kv" style="margin-top:10px"><b>Timeline date:</b>
+        <span class="badge b-upload">none (opted out) · placed by upload: ${fmtTs(r.created_at)}</span></div>`
+    : `<div class="kv" style="margin-top:10px"><b>Timeline date:</b>
+        ${scoreChip(r)} <span class="badge b-${r.ts_source}">${SRC_LABEL[r.ts_source]} · ${fmtTs(r.ts_effective)}</span>
+        <span class="sub">confidence ${r.ts_score||1}/10 · uploaded ${fmtTs(r.created_at)}</span></div>
+       ${r.ts_reasoning? `<div class="kv sub">↳ ${esc(r.ts_reasoning)}</div>`:""}`;
   modal(`<h3>${esc(r.title||r.original_name||"Record")}</h3>
     ${img}
+    ${r.user_context? `<div class="ctx-box"><b>Your context:</b> ${esc(r.user_context)}<div class="sub" style="margin-top:3px">Everything below is the AI's read of the item.</div></div>`:""}
     ${r.description? `<div class="kv"><b>Summary:</b> ${descWithAmends(r)}</div>`:""}
     ${srcFlags}
+    ${linkPreviewHtml(r)}
     ${r.body? `<div class="kv"><b>${r.kind==="link"?"Link":"Content"}:</b></div><div class="mono">${r.kind==="link"?`<a href="${esc(r.body)}" target="_blank">${esc(r.body)}</a>`:esc(r.body)}</div>`:""}
-    ${r.user_context? `<div class="kv"><b>Your context:</b> ${esc(r.user_context)}</div>`:""}
     ${r.tags?.length? `<div class="kv"><b>Tags:</b> ${r.tags.map(esc).join(", ")}</div>`:""}
-    <div class="kv" style="margin-top:10px"><b>Timeline date:</b>
-      ${scoreChip(r)} <span class="badge b-${r.ts_source}">${SRC_LABEL[r.ts_source]} · ${fmtTs(r.ts_effective)}</span>
-      <span class="sub">confidence ${r.ts_score||1}/10 · uploaded ${fmtTs(r.created_at)}</span></div>
-    ${r.ts_reasoning? `<div class="kv sub">↳ ${esc(r.ts_reasoning)}</div>`:""}
-    <label>Fix the timeline date</label>
+    ${dateRow}
+    <label>${r.ts_source==="none"?"Add a timeline date":"Fix the timeline date"}</label>
     ${dateInputHtml("d")}
     <div class="row" style="margin-top:8px">
       <button class="btn" onclick="setManualTs('${r.id}')">Set date</button>
