@@ -71,7 +71,7 @@ def db() -> sqlite3.Connection:
 # receipts-data/backups/ (one per day, last 14 kept) so no update can
 # silently destroy history.
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 MIGRATIONS: dict = {
     # v4: audit entries remember their module and a human label, so the
@@ -93,8 +93,13 @@ MIGRATIONS: dict = {
         "WHEN ts_source='content' THEN 7 "
         "ELSE 1 END WHERE ts_score=0",
     ],
+    # v6: link previews (og: metadata) for link records.
+    # Dateless records use ts_effective=NULL + ts_source='none' — no migration needed.
+    6: [
+        "ALTER TABLE records ADD COLUMN link_meta TEXT NOT NULL DEFAULT ''",
+    ],
     # future example:
-    # 6: ["ALTER TABLE modules ADD COLUMN brings_joy INTEGER NOT NULL DEFAULT 0"],
+    # 7: ["ALTER TABLE modules ADD COLUMN brings_joy INTEGER NOT NULL DEFAULT 0"],
 }
 
 
@@ -157,6 +162,7 @@ def init_db():
             ts_confidence TEXT NOT NULL DEFAULT '',    -- exact|approximate|guess (legacy)
             ts_score INTEGER NOT NULL DEFAULT 0,       -- 1-10 confidence scale
             ts_reasoning TEXT NOT NULL DEFAULT '',
+            link_meta TEXT NOT NULL DEFAULT '',        -- og: preview data for links
             ai_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL
         );
@@ -231,6 +237,10 @@ def row_to_record(r: sqlite3.Row) -> dict:
     d = dict(r)
     d["tags"] = json.loads(d.pop("tags_json") or "[]")
     d["ai"] = json.loads(d.pop("ai_json") or "{}")
+    try:
+        d["link_meta"] = json.loads(d.get("link_meta") or "{}")
+    except Exception:
+        d["link_meta"] = {}
     return d
 
 
@@ -299,6 +309,44 @@ def exif_datetime(path: Path) -> Optional[str]:
         return None
     except Exception:
         return None
+
+
+def fetch_link_meta(url: str) -> dict:
+    """Best-effort og: metadata for link previews (like Twitter link cards)."""
+    try:
+        resp = http.get(url, timeout=6, headers={"User-Agent": "Mozilla/5.0 (Receipts local archive)"})
+        html = resp.text[:300_000]
+
+        def og(prop):
+            m = re.search(
+                r'<meta[^>]+(?:property|name)=["\']' + prop + r'["\'][^>]+content=["\']([^"\']+)["\']',
+                html, re.I) or re.search(
+                r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\']' + prop + r'["\']',
+                html, re.I)
+            return m.group(1).strip() if m else ""
+
+        title = og("og:title") or og("twitter:title")
+        if not title:
+            m = re.search(r"<title[^>]*>(.*?)</title>", html, re.I | re.S)
+            title = m.group(1).strip()[:150] if m else ""
+        meta = {
+            "title": title[:200],
+            "description": (og("og:description") or og("twitter:description") or og("description"))[:300],
+            "image": og("og:image") or og("twitter:image"),
+            "site": og("og:site_name") or re.sub(r"^www\.", "", re.sub(r"^https?://", "", url).split("/")[0]),
+        }
+        return {k: v for k, v in meta.items() if v}
+    except Exception:
+        return {}
+
+
+ANALYZABLE_TEXT_MIMES = ("text/plain", "text/markdown", "text/csv", "text/html")
+
+
+def is_analyzable(kind: str, mime: str) -> bool:
+    return (kind in ("image", "note", "link", "moment")
+            or mime == "application/pdf"
+            or (mime or "") in ANALYZABLE_TEXT_MIMES)
 
 
 def file_mtime_iso(path: Path) -> str:
@@ -521,14 +569,30 @@ def analyze_record(record: dict, file_path: Optional[Path]) -> dict:
     meta = "\n".join(meta_lines)
 
     content = []
-    if record["kind"] == "image" and file_path and file_path.exists():
-        mime = record.get("mime") or "image/png"
-        if file_path.stat().st_size <= 4_500_000:
+    mime = record.get("mime") or ""
+    if file_path and file_path.exists():
+        size = file_path.stat().st_size
+        if record["kind"] == "image" and size <= 4_500_000:
             b64 = base64.b64encode(file_path.read_bytes()).decode()
             content.append({
                 "type": "image",
-                "source": {"type": "base64", "media_type": mime, "data": b64},
+                "source": {"type": "base64", "media_type": mime or "image/png", "data": b64},
             })
+        elif mime == "application/pdf" and size <= 15_000_000:
+            b64 = base64.b64encode(file_path.read_bytes()).decode()
+            content.append({
+                "type": "document",
+                "source": {"type": "base64", "media_type": "application/pdf", "data": b64},
+            })
+        elif mime in ANALYZABLE_TEXT_MIMES and size <= 2_000_000:
+            try:
+                meta += "\n\nFile contents:\n" + file_path.read_text(errors="replace")[:20_000]
+            except Exception:
+                pass
+    if record.get("ts_source") == "none":
+        meta += ("\n\nNOTE: the owner opted OUT of dating this item. Skip timestamp work: "
+                 "return timestamp null, timestamp_score 1, timestamp_reasoning \"Dating opted out.\" "
+                 "Focus on the description, extracted text, and tags.")
     content.append({"type": "text", "text": f"Item metadata:\n{meta}\n\nAnalyze this item."})
 
     raw = call_claude(ANALYZE_SYSTEM, content)
@@ -554,14 +618,15 @@ def apply_analysis(record_id: str, result: dict, manual_ts: Optional[str]):
         set_col("title", result["title"][:200])
     if result.get("description"):
         set_col("description", result["description"])
-    if result.get("extracted_text") and r["kind"] == "image":
+    if result.get("extracted_text") and (r["kind"] == "image" or (r["kind"] == "file" and not r["body"])):
         set_col("body", result["extracted_text"])
     if result.get("tags"):
         set_col("tags_json", json.dumps(result["tags"][:15]))
     set_col("ai_json", json.dumps(result))
 
     # timestamp priority: manual > AI(content) > AI(metadata) > upload
-    if not manual_ts and r["ts_source"] != "manual":
+    # dateless records (ts_source='none') never get a timestamp from analysis
+    if not manual_ts and r["ts_source"] not in ("manual", "none"):
         ts = result.get("timestamp")
         src = result.get("timestamp_source", "upload")
         try:
@@ -848,11 +913,12 @@ class ModulePatch(BaseModel):
 
 class NoteIn(BaseModel):
     module_id: str
-    kind: str = "note"  # note|link
+    kind: str = "note"  # note|link|moment
     title: str = ""
     body: str
     user_context: str = ""
     manual_timestamp: Optional[str] = None
+    include_date: bool = True
 
 
 class RecordPatch(BaseModel):
@@ -1043,6 +1109,7 @@ async def upload(
     user_context: str = Form(""),
     manual_timestamp: str = Form(""),
     title: str = Form(""),
+    include_date: str = Form("1"),
 ):
     conn = db()
     if not conn.execute("SELECT id FROM modules WHERE id=?", (module_id,)).fetchone():
@@ -1063,9 +1130,11 @@ async def upload(
     created = now_iso()
     manual = manual_timestamp.strip() or None
 
-    # initial timestamp: manual > EXIF > upload time
+    # initial timestamp: opted-out > manual > EXIF > upload time
     ts, src, conf, score, reason = created, "upload", "guess", 1, "Defaulted to upload time."
-    if manual:
+    if include_date != "1":
+        ts, src, conf, score, reason = None, "none", "", 0, "Dating opted out at upload."
+    elif manual:
         ts, src, conf, score, reason = manual, "manual", "exact", 10, "Set manually at upload."
     else:
         ex = exif_datetime(dest) if kind == "image" else None
@@ -1087,7 +1156,7 @@ async def upload(
                module_id=module_id, label=title or orig)
 
     ai_error, amended = None, 0
-    if ai_available() and kind == "image":
+    if ai_available() and is_analyzable(kind, mime):
         try:
             rec = get_record(rid)
             ai_result = analyze_record(rec, dest)
@@ -1114,15 +1183,19 @@ def create_note(n: NoteIn):
     rid = new_id()
     created = now_iso()
     manual = (n.manual_timestamp or "").strip() or None
-    ts = manual or created
-    src = "manual" if manual else "upload"
+    if not n.include_date:
+        ts, src, conf, score, reason = None, "none", "", 0, "Dating opted out."
+    elif manual:
+        ts, src, conf, score, reason = manual, "manual", "exact", 10, "Set manually."
+    else:
+        ts, src, conf, score, reason = created, "upload", "guess", 1, "Defaulted to creation time."
+    link_meta = json.dumps(fetch_link_meta(n.body.strip())) if n.kind == "link" else ""
     conn.execute(
         """INSERT INTO records (id,module_id,kind,title,body,user_context,
-           ts_effective,ts_source,ts_confidence,ts_score,ts_reasoning,created_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+           ts_effective,ts_source,ts_confidence,ts_score,ts_reasoning,link_meta,created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (rid, n.module_id, n.kind, n.title, n.body, n.user_context,
-         ts, src, "exact" if manual else "guess", 10 if manual else 1,
-         "Set manually." if manual else "Defaulted to creation time.", created),
+         ts, src, conf, score, reason, link_meta, created),
     )
     conn.commit()
     conn.close()
