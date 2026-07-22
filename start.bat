@@ -10,7 +10,7 @@ if errorlevel 1 (
 if not exist ".venv" (
   echo First run - setting things up, one minute...
   python -m venv .venv
-  .venv\Scripts\pip install -q -r requirements.txt
 )
+.venv\Scripts\pip install -q -r requirements.txt
 .venv\Scripts\python app.py
 pause

@@ -18,7 +18,8 @@ if [ ! -d ".venv" ]; then
   command -v notify-send >/dev/null && notify-send "Receipts" "First run — setting up (about a minute)…"
   echo "First run — setting things up (one minute)…"
   python3 -m venv .venv
-  ./.venv/bin/pip install -q -r requirements.txt
 fi
+# keep dependencies in sync with requirements.txt (fast when nothing changed)
+./.venv/bin/pip install -q -r requirements.txt
 
 exec ./.venv/bin/python app.py
