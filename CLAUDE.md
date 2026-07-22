@@ -80,6 +80,11 @@ holds their irreplaceable personal archive. Convenience never outranks preservat
   delete automatically.
 - Model usage fallback (auto-downgrade to cheaper model at high usage) — owner
   mentioned, low priority.
+- **Custom LLM instructions:** owner wants to explore a client-side setting for
+  global custom AI instructions (style/voice preferences), and possibly
+  per-module instructions/context on top. Note: description voice + extracted-
+  text-as-search-index rules currently live in ANALYZE_SYSTEM in app.py; a
+  future custom-instructions setting should append to those, not replace them.
 - UI ideas noted: per-module "brings me joy" toggle example — any such feature
   must be a new column with a default, per Rule 2.
 
