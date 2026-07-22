@@ -71,7 +71,7 @@ def db() -> sqlite3.Connection:
 # receipts-data/backups/ (one per day, last 14 kept) so no update can
 # silently destroy history.
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 MIGRATIONS: dict = {
     # v4: audit entries remember their module and a human label, so the
@@ -98,8 +98,12 @@ MIGRATIONS: dict = {
     6: [
         "ALTER TABLE records ADD COLUMN link_meta TEXT NOT NULL DEFAULT ''",
     ],
+    # v7: owner-managed tags on modules (distinct from AI keyword tags on records).
+    7: [
+        "ALTER TABLE modules ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'",
+    ],
     # future example:
-    # 7: ["ALTER TABLE modules ADD COLUMN brings_joy INTEGER NOT NULL DEFAULT 0"],
+    # 8: ["ALTER TABLE modules ADD COLUMN brings_joy INTEGER NOT NULL DEFAULT 0"],
 }
 
 
@@ -142,6 +146,7 @@ def init_db():
             type TEXT NOT NULL DEFAULT 'generic',  -- person|event|place|project|generic
             fields_json TEXT NOT NULL DEFAULT '{}',
             notes TEXT NOT NULL DEFAULT '',
+            tags_json TEXT NOT NULL DEFAULT '[]',  -- owner-managed module tags
             created_at TEXT NOT NULL
         );
 
@@ -533,6 +538,7 @@ def get_module_row(mid: str) -> Optional[dict]:
         return None
     d = dict(r)
     d["fields"] = json.loads(d.pop("fields_json") or "{}")
+    d["tags"] = json.loads(d.pop("tags_json", "[]") or "[]")
     return d
 
 
@@ -545,6 +551,8 @@ def module_context_lines(module: Optional[dict]) -> list:
             lines.append(f"  {k}: {v}")
     if module.get("notes"):
         lines.append(f"  Owner's notes about this module: {module['notes']}")
+    if module.get("tags"):
+        lines.append(f"  Owner's tags on this module: {', '.join(module['tags'])}")
     return lines
 
 
@@ -742,13 +750,7 @@ def apply_analysis(record_id: str, result: dict, manual_ts: Optional[str]):
         log_change("record", record_id, "title", r["title"], result["title"][:200],
                    actor="ai", note="Title from AI analysis",
                    module_id=r["module_id"], label=lbl)
-    if result.get("tags"):
-        old_tags = r["tags_json"] or "[]"
-        new_tags = json.dumps(result["tags"][:15])
-        if new_tags != old_tags:
-            log_change("record", record_id, "tags", old_tags, new_tags,
-                       actor="ai", note="Tags from AI analysis",
-                       module_id=r["module_id"], label=lbl)
+    # (AI keyword tags on records are set silently by design — owner's choice, no audit noise)
     if result.get("extracted_text") and (r["kind"] == "image" or (r["kind"] == "file" and not r["body"])):
         log_change("record", record_id, "body", r["body"], result["extracted_text"],
                    actor="ai", note="Extracted text / search index from AI analysis",
@@ -998,6 +1000,7 @@ class ModuleIn(BaseModel):
     type: str = "generic"
     fields: dict = {}
     notes: str = ""
+    tags: list = []
 
 
 class ModulePatch(BaseModel):
@@ -1108,6 +1111,7 @@ def list_modules():
     for r in rows:
         d = dict(r)
         d["fields"] = json.loads(d.pop("fields_json") or "{}")
+        d["tags"] = json.loads(d.pop("tags_json", "[]") or "[]")
         out.append(d)
     return out
 
@@ -1116,14 +1120,16 @@ def list_modules():
 def create_module(m: ModuleIn):
     mid = new_id()
     conn = db()
+    tags = [t.strip() for t in (m.tags or []) if t.strip()][:30]
     conn.execute(
-        "INSERT INTO modules (id,name,type,fields_json,notes,created_at) VALUES (?,?,?,?,?,?)",
-        (mid, m.name.strip(), m.type, json.dumps(m.fields), m.notes, now_iso()),
+        "INSERT INTO modules (id,name,type,fields_json,notes,tags_json,created_at) VALUES (?,?,?,?,?,?,?)",
+        (mid, m.name.strip(), m.type, json.dumps(m.fields), m.notes, json.dumps(tags), now_iso()),
     )
     conn.commit()
     conn.close()
     log_change("module", mid, "created", "", m.name.strip(),
-               note=f"Created ({m.type})", module_id=mid, label=m.name.strip())
+               note=f"Created ({m.type})" + (f" with tags: {', '.join(tags)}" if tags else ""),
+               module_id=mid, label=m.name.strip())
     return {"id": mid}
 
 
@@ -1136,7 +1142,111 @@ def get_module(mid: str):
         raise HTTPException(404, "Module not found")
     d = dict(r)
     d["fields"] = json.loads(d.pop("fields_json") or "{}")
+    d["tags"] = json.loads(d.pop("tags_json", "[]") or "[]")
     return d
+
+
+class ModuleTagsIn(BaseModel):
+    add: list = []
+    remove: list = []
+
+
+@app.post("/api/modules/{mid}/tags")
+def module_tags(mid: str, t: ModuleTagsIn):
+    mod = get_module_row(mid)
+    if not mod:
+        raise HTTPException(404, "Module not found")
+    old = mod["tags"]
+    new = [x for x in old if x not in (t.remove or [])]
+    for x in (t.add or []):
+        x = x.strip()
+        if x and x not in new:
+            new.append(x)
+    new = new[:30]
+    if new == old:
+        return {"tags": old}
+    conn = db()
+    conn.execute("UPDATE modules SET tags_json=? WHERE id=?", (json.dumps(new), mid))
+    conn.commit()
+
+    # Batched audit: if the very latest audit entry is a tags entry for this same
+    # module, extend it instead of adding a new line. (Owner-sanctioned exception
+    # to append-only: same-window tag edits merge into one entry.)
+    last = conn.execute("SELECT * FROM change_log ORDER BY created_at DESC LIMIT 1").fetchone()
+    conn.close()
+
+    def summary(before, after):
+        added = [x for x in after if x not in before]
+        removed = [x for x in before if x not in after]
+        parts = []
+        if added:
+            parts.append("Added tags: " + ", ".join(added))
+        if removed:
+            parts.append("Removed tags: " + ", ".join(removed))
+        return " · ".join(parts) or "Tags updated"
+
+    if (last and last["entity_type"] == "module" and last["entity_id"] == mid
+            and last["field"] == "tags" and last["actor"] == "you"):
+        base = json.loads(last["old_value"] or "[]")
+        conn = db()
+        conn.execute("UPDATE change_log SET new_value=?, note=? WHERE id=?",
+                     (json.dumps(new), summary(base, new), last["id"]))
+        conn.commit()
+        conn.close()
+    else:
+        log_change("module", mid, "tags", json.dumps(old), json.dumps(new),
+                   note=summary(old, new), module_id=mid, label=mod["name"])
+    return {"tags": new}
+
+
+@app.get("/api/tags")
+def all_tags():
+    conn = db()
+    rows = conn.execute("SELECT tags_json FROM modules").fetchall()
+    conn.close()
+    tags = set()
+    for r in rows:
+        tags.update(json.loads(r["tags_json"] or "[]"))
+    return sorted(tags, key=str.lower)
+
+
+DEFAULT_TAG_SUGGESTIONS = ["friend", "family", "work", "important", "archive",
+                           "hobby", "finance", "travel", "health", "investigation"]
+
+
+@app.get("/api/modules/{mid}/tag_suggestions")
+def tag_suggestions(mid: str):
+    mod = get_module_row(mid)
+    if not mod:
+        raise HTTPException(404, "Module not found")
+    existing = set(x.lower() for x in mod["tags"])
+    has_context = bool(mod.get("notes") or any((mod.get("fields") or {}).values()))
+    conn = db()
+    nrec = conn.execute("SELECT COUNT(*) c FROM records WHERE module_id=?", (mid,)).fetchone()["c"]
+    conn.close()
+    suggestions = []
+    if ai_available() and (has_context or nrec > 0):
+        try:
+            payload = "\n".join(module_context_lines(mod))
+            ev = sibling_evidence(mid, "", limit=6)
+            if ev:
+                payload += "\nRecords:\n" + "\n".join(ev)
+            known = all_tags()
+            if known:
+                payload += "\nTags the owner already uses elsewhere (prefer reusing these when apt): " + ", ".join(known)
+            raw = call_claude(
+                "Suggest up to 10 short, lowercase, reusable organizational tags for this "
+                "archive module (like 'friend', 'coworker', 'bitcoin', 'legal'). Only suggest "
+                "what the context clearly supports — fewer good tags beat stretched ones. "
+                'Reply ONLY with JSON: {"tags": [str]}',
+                [{"type": "text", "text": payload}], max_tokens=300)
+            suggestions = [t.strip() for t in parse_json_block(raw).get("tags", []) if t.strip()]
+        except Exception:
+            suggestions = []
+    if not suggestions:
+        suggestions = list(DEFAULT_TAG_SUGGESTIONS)
+    suggestions = [t for t in suggestions if t.lower() not in existing]
+    return {"suggestions": suggestions[:10]}
 
 
 @app.patch("/api/modules/{mid}")
