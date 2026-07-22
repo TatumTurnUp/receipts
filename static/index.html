@@ -170,6 +170,17 @@ h2{font-size:16px;margin:22px 0 10px}
 .t-edit{opacity:0;transition:opacity .15s;font-size:14px;vertical-align:2px}
 .modal h3:hover .t-edit{opacity:1}
 
+/* module tags */
+.tagchip{display:inline-flex;align-items:center;gap:5px;background:var(--bg3);border:1px solid var(--line);border-radius:20px;padding:3px 10px;font-size:12px}
+.tagchip .x{cursor:pointer;color:var(--dim);font-weight:700}
+.tagchip .x:hover{color:var(--red)}
+.tag-sug{display:inline-flex;align-items:center;gap:4px;background:transparent;border:1px dashed var(--line);border-radius:20px;padding:3px 10px;font-size:12px;color:var(--dim);cursor:pointer}
+.tag-sug:hover{border-color:var(--accent);color:var(--accent)}
+.tag-add{border:1px solid var(--line);background:var(--bg3);border-radius:20px;width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;color:var(--dim)}
+.tag-add:hover{border-color:var(--accent2);color:var(--text)}
+.side-tag{display:inline-block;background:var(--bg3);border:1px solid var(--line);border-radius:14px;padding:2px 9px;font-size:11.5px;color:var(--dim);cursor:pointer;margin:2px 2px 2px 0}
+.side-tag.on{border-color:var(--accent);color:var(--accent)}
+
 /* timestamp confidence score */
 .score{display:inline-flex;align-items:center;justify-content:center;min-width:21px;height:19px;border-radius:6px;font-size:11px;font-weight:800;padding:0 4px;cursor:help}
 .s-r{background:rgba(229,83,75,.18);color:var(--red);border:1px solid rgba(229,83,75,.4)}
@@ -260,6 +271,7 @@ h2{font-size:16px;margin:22px 0 10px}
         <h1 id="m-name"></h1>
         <div class="sub" id="m-sub"></div>
         <div class="fields" id="m-fields"></div>
+        <div id="m-tags" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;align-items:center"></div>
       </div>
       <div class="mod-actions">
         <button class="btn" onclick="openEditModule()">Edit</button>
@@ -347,7 +359,7 @@ const MODELS = [
   ["claude-haiku-4-5-20251001","Haiku — cheapest"]
 ];
 
-let state = {modules:[], moduleId:null, module:null, aiOn:false};
+let state = {modules:[], moduleId:null, module:null, aiOn:false, tagFilter:new Set(), tagSugs:[]};
 
 const $ = id => document.getElementById(id);
 const esc = s => (s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -392,9 +404,20 @@ function readDateInput(prefix){
 /* ---------------- sidebar ---------------- */
 async function loadModules(){
   state.modules = await api("/modules");
-  const byType={};
-  for(const m of state.modules) (byType[m.type]=byType[m.type]||[]).push(m);
+  // tag filter chips
+  const allTags = [...new Set(state.modules.flatMap(m=>m.tags||[]))].sort((a,b)=>a.toLowerCase().localeCompare(b.toLowerCase()));
+  for(const t of [...state.tagFilter]) if(!allTags.includes(t)) state.tagFilter.delete(t);
   let html="";
+  if(allTags.length){
+    html += `<div class="side-head"><span>Tags</span>${state.tagFilter.size?`<span style="cursor:pointer" onclick="clearTagFilter()">clear</span>`:""}</div><div style="padding:0 4px">`;
+    html += allTags.map(t=>`<span class="side-tag ${state.tagFilter.has(t)?'on':''}" onclick="toggleTagFilter('${esc(t)}')">${esc(t)}</span>`).join("");
+    html += `</div>`;
+  }
+  const visible = state.tagFilter.size
+    ? state.modules.filter(m=>(m.tags||[]).some(t=>state.tagFilter.has(t)))
+    : state.modules;
+  const byType={};
+  for(const m of visible) (byType[m.type]=byType[m.type]||[]).push(m);
   for(const t of ["person","event","place","project","generic"]){
     if(!byType[t]) continue;
     html += `<div class="side-head"><span>${GROUPS[t]}</span></div>`;
@@ -403,8 +426,15 @@ async function loadModules(){
         <span>${ICONS[t]}</span><span>${esc(m.name)}</span><span class="cnt">${m.record_count||""}</span></div>`;
     }
   }
+  if(state.tagFilter.size && !visible.length) html += `<div class="side-head"><span>No modules match</span></div>`;
   $("mod-groups").innerHTML = html || `<div class="side-head"><span>No modules yet</span></div>`;
 }
+function toggleTagFilter(t){
+  state.tagFilter.has(t)? state.tagFilter.delete(t) : state.tagFilter.add(t);
+  loadModules();
+  if(!state.moduleId && !$("view-home").classList.contains("hidden")) showHome();
+}
+function clearTagFilter(){ state.tagFilter.clear(); loadModules(); }
 
 /* ---------------- home ---------------- */
 function fmtBytes(b){
@@ -440,7 +470,10 @@ async function showHome(){
   $("view-audit").classList.add("hidden");
   $("maudit").classList.add("hidden");
   await loadModules();
-  $("home-recent").innerHTML = (state.modules.length? state.modules.map(moduleCardHtml).join("") : "") +
+  const homeMods = state.tagFilter.size
+    ? state.modules.filter(m=>(m.tags||[]).some(t=>state.tagFilter.has(t)))
+    : state.modules;
+  $("home-recent").innerHTML = (homeMods.length? homeMods.map(moduleCardHtml).join("") : "") +
     `<div class="card" onclick="openNewModule()" style="border-style:dashed">
        <div class="thumb" style="height:86px;color:var(--dim)">➕</div>
        <div class="cbody"><div class="ct" style="color:var(--dim)">New module</div>
@@ -474,9 +507,58 @@ async function showModule(id){
   $("m-sub").textContent = (GROUPS[m.type]||"Module").replace(/s$/,"") + (m.notes? " — "+m.notes : "");
   $("m-fields").innerHTML = Object.entries(m.fields||{}).filter(([k,v])=>v)
     .map(([k,v])=>`<div class="field-chip"><b>${esc(k)}</b>${esc(v)}</div>`).join("");
+  renderModuleTags();
+  loadTagSuggestions();
   loadModules();
   modTab("records");
   await refreshRecords();
+}
+
+/* ----- module tags ----- */
+function renderModuleTags(){
+  const m=state.module; if(!m) return;
+  const sugs=(state.tagSugs||[]).filter(t=>!(m.tags||[]).includes(t)).slice(0,5);
+  $("m-tags").innerHTML =
+    (m.tags||[]).map(t=>`<span class="tagchip">${esc(t)}<span class="x" title="Remove tag" onclick="removeModuleTag('${esc(t)}')">✕</span></span>`).join("") +
+    sugs.map(t=>`<span class="tag-sug" title="Suggested — click to add" onclick="addModuleTags(['${esc(t)}'])">＋ ${esc(t)}</span>`).join("") +
+    `<span class="tag-add" title="Add tag" onclick="showTagInput()">＋</span>
+     <span id="m-tag-in-wrap" class="hidden">
+       <input id="m-tag-in" list="known-tags" placeholder="tag name…" style="width:140px;padding:4px 10px;border-radius:14px;font-size:12px"
+         onkeydown="if(event.key==='Enter')commitTagInput();if(event.key==='Escape')renderModuleTags()">
+     </span>
+     <datalist id="known-tags"></datalist>`;
+}
+async function showTagInput(){
+  $("m-tag-in-wrap").classList.remove("hidden");
+  const inp=$("m-tag-in"); inp.focus();
+  try{
+    const tags=await api("/tags");
+    $("known-tags").innerHTML = tags.map(t=>`<option value="${esc(t)}">`).join("");
+  }catch(e){}
+}
+function commitTagInput(){
+  const v=$("m-tag-in").value.trim();
+  if(v) addModuleTags([v]); else renderModuleTags();
+}
+async function addModuleTags(tags){
+  const r=await jpost(`/modules/${state.moduleId}/tags`,{add:tags});
+  state.module.tags=r.tags;
+  state.tagSugs=(state.tagSugs||[]).filter(t=>!tags.includes(t));
+  renderModuleTags(); loadModules();
+}
+async function removeModuleTag(tag){
+  if(!confirm(`Remove the tag "${tag}" from ${state.module.name}?`)) return;
+  const r=await jpost(`/modules/${state.moduleId}/tags`,{remove:[tag]});
+  state.module.tags=r.tags;
+  renderModuleTags(); loadModules();
+}
+async function loadTagSuggestions(){
+  state.tagSugs=[];
+  try{
+    const mid=state.moduleId;
+    const r=await api(`/modules/${mid}/tag_suggestions`);
+    if(state.moduleId===mid){ state.tagSugs=r.suggestions||[]; renderModuleTags(); }
+  }catch(e){}
 }
 async function refreshRecords(){
   const mid=state.moduleId, seq=navSeq;
@@ -611,6 +693,7 @@ function auditSentence(e){
     if(e.field==="created") return `${who} created this module`;
     if(e.field==="deleted") return `${who} deleted module ${L}`;
     if(e.field==="name") return `${who} renamed the module to “${esc(e.new_value)}”`;
+    if(e.field==="tags") return `${who} updated the module's tags`;
     return `${who} updated the module's ${esc(e.field)}`;
   }
   switch(e.field){
@@ -689,11 +772,31 @@ function moduleModal(m){
     <label>Type</label><div class="preset-grid" id="preset-grid" ${m?'style="pointer-events:none;opacity:.6"':''}>${presets}</div>
     <label>Name</label><input id="nm-name" placeholder="${esc(NAME_PLACEHOLDER[type])}" value="${m?esc(m.name):""}">
     <div id="nm-fields"></div>
+    ${m? "" : `<label>Tags (optional — for filtering modules in the sidebar; press Enter to add)</label>
+    <div id="nm-tags" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:4px"></div>
+    <input id="nm-tag-in" list="nm-known-tags" placeholder="e.g. friend, work, bitcoin…"
+      onkeydown="if(event.key==='Enter'){event.preventDefault();nmAddTag()}">
+    <datalist id="nm-known-tags"></datalist>`}
     <label>Notes — context the AI uses when reading and searching this module</label>
     <textarea id="nm-notes" rows="4" placeholder="${esc(NOTES_PLACEHOLDER[type])}">${m?esc(m.notes):""}</textarea>
     <div class="m-actions"><button class="btn" onclick="closeModal()">Cancel</button>
     <button class="btn primary" onclick="saveModule(${m?`'${m.id}'`:"null"})">${m?"Save":"Create"}</button></div>`);
   renderPresetFields(type, m? m.fields : {});
+  if(!m){
+    nmTags=[]; nmRenderTags();
+    api("/tags").then(ts=>{ const d=$("nm-known-tags"); if(d) d.innerHTML=ts.map(t=>`<option value="${esc(t)}">`).join(""); }).catch(()=>{});
+  }
+}
+let nmTags=[];
+function nmAddTag(){
+  const inp=$("nm-tag-in"), v=inp.value.trim();
+  if(v && !nmTags.includes(v)) nmTags.push(v);
+  inp.value=""; nmRenderTags();
+}
+function nmRemoveTag(t){ nmTags=nmTags.filter(x=>x!==t); nmRenderTags(); }
+function nmRenderTags(){
+  const el=$("nm-tags"); if(!el) return;
+  el.innerHTML = nmTags.map(t=>`<span class="tagchip">${esc(t)}<span class="x" onclick="nmRemoveTag('${esc(t)}')">✕</span></span>`).join("");
 }
 function pickPreset(el){
   document.querySelectorAll(".preset").forEach(p=>p.classList.remove("sel"));
@@ -714,7 +817,11 @@ async function saveModule(id){
   const fields={};
   document.querySelectorAll(".preset-field").forEach(i=>{ if(i.value.trim()) fields[i.dataset.k]=i.value.trim(); });
   if(id){ await jpost("/modules/"+id, {name, fields, notes:$("nm-notes").value}, "PATCH"); closeModal(); showModule(id); }
-  else { const r=await jpost("/modules", {name, type, fields, notes:$("nm-notes").value}); closeModal(); showModule(r.id); }
+  else {
+    const pending=$("nm-tag-in")?.value.trim(); if(pending && !nmTags.includes(pending)) nmTags.push(pending);
+    const r=await jpost("/modules", {name, type, fields, notes:$("nm-notes").value, tags:nmTags});
+    closeModal(); showModule(r.id);
+  }
 }
 async function deleteModule(){
   if(!confirm(`Delete "${state.module.name}" and ALL its records? This cannot be undone.`)) return;
