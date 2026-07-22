@@ -142,7 +142,9 @@ h2{font-size:16px;margin:22px 0 10px}
 
 /* amendments */
 .amend{background:rgba(232,182,76,.22);border-bottom:1px dashed var(--amber);border-radius:3px;position:relative;cursor:help}
+.amend.ok{background:transparent}
 .amend .tip{display:none;position:absolute;left:0;top:calc(100% + 6px);z-index:60;width:300px;background:var(--bg3);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:12.5px;color:var(--text);box-shadow:0 8px 24px rgba(0,0,0,.5);cursor:default}
+.amend .tip::before{content:"";position:absolute;left:0;right:0;top:-10px;height:10px} /* hover bridge over the gap */
 .amend:hover .tip{display:block}
 .tip .fb{display:flex;gap:6px;margin-top:8px}
 .flag{background:rgba(232,182,76,.08);border:1px solid rgba(232,182,76,.35);border-radius:10px;padding:10px 12px;margin:8px 0;font-size:13px}
@@ -452,9 +454,12 @@ function homeTab(t){
 }
 
 /* ---------------- module view ---------------- */
+let navSeq=0; // guards against stale async responses rendering the wrong module
 async function showModule(id){
+  const seq=++navSeq;
   state.moduleId=id;
   state.module = await api("/modules/"+id);
+  if(seq!==navSeq) return;
   $("view-home").classList.add("hidden");
   $("view-audit").classList.add("hidden");
   $("view-module").classList.remove("hidden");
@@ -472,10 +477,13 @@ async function showModule(id){
   await refreshRecords();
 }
 async function refreshRecords(){
-  const recs = await api(`/modules/${state.moduleId}/records`);
+  const mid=state.moduleId, seq=navSeq;
+  const recs = await api(`/modules/${mid}/records`);
+  if(state.moduleId!==mid || seq!==navSeq) return; // user navigated away meanwhile
   $("mod-records").innerHTML = recs.length? recs.map(cardHtml).join("") :
     `<div class="empty" style="grid-column:1/-1">No records yet. Upload screenshots, add notes or links.</div>`;
-  const tl = await api("/timeline?module_id="+state.moduleId);
+  const tl = await api("/timeline?module_id="+mid);
+  if(state.moduleId!==mid || seq!==navSeq) return;
   const s = state.tlSort||"content";
   $("mod-timeline").innerHTML =
     `<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
@@ -900,22 +908,24 @@ function descWithAmends(r){
       This was added after you uploaded <a href="#" onclick="closeModal();openDetail('${a.source_record_id}');return false">${esc(a.source_title||a.source_file||"a newer file")}</a>,
       which revealed: ${esc(a.reason)}
       <div class="fb">${fbBtns(a)}</div></span>`;
-    html = html.replace(at, `<span class="amend">${at}${tip}</span>`);
+    html = html.replace(at, `<span class="amend${a.verdict==="up"?" ok":""}">${at}${tip}</span>`);
   }
   return html;
 }
 function fbBtns(a){
-  if(a.verdict==="up") return `<span class="sub">👍 you confirmed this</span>`;
-  if(a.verdict==="neutral") return `<span class="sub">😐 noted</span>`;
-  return `<button onclick="amendFb('${a.id}','up','${a.target_record_id}')" title="Correct change">👍</button>
-    <button onclick="amendFb('${a.id}','neutral','${a.target_record_id}')" title="Neutral">😐</button>
-    <button onclick="amendFb('${a.id}','down','${a.target_record_id}')" title="Wrong — undo it">👎</button>`;
+  if(a.verdict==="up") return `<span class="sub">👍 you confirmed this change</span>`;
+  if(a.verdict==="neutral") return `<span class="sub">😐 reverted (not held against the AI)</span>`;
+  if(a.verdict==="down") return `<span class="sub">👎 reverted — the AI was told it was wrong</span>`;
+  return `<button onclick="amendFb('${a.id}','up','${a.target_record_id}')" title="Correct — keep this change">👍</button>
+    <button onclick="amendFb('${a.id}','neutral','${a.target_record_id}')" title="Close but not right — undo, don't hold it against the AI">😐</button>
+    <button onclick="amendFb('${a.id}','down','${a.target_record_id}')" title="Wrong — undo and remember this mistake">👎</button>`;
 }
 async function amendFb(aid, verdict, backTo){
   try{
     const r=await jpost(`/amendments/${aid}/feedback`,{verdict});
-    toast(verdict==="down"? "Change reversed — the AI will learn from this." :
-          verdict==="up"? "Thanks — the AI will remember this was right." : "Noted.");
+    toast(verdict==="down"? "Reverted — the AI will remember it got this wrong." :
+          verdict==="up"? "Confirmed — the change stays, marked as an AI edit." :
+          "Reverted — no hard feelings for the AI.");
     closeModal(); openDetail(backTo);
     if(state.moduleId) refreshRecords();
   }catch(e){ toast("Feedback failed: "+esc(e.message)); }
