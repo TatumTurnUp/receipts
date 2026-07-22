@@ -40,6 +40,9 @@ DEFAULT_CONFIG = {
     "anthropic_api_key": "",
     "model": "claude-sonnet-5",
     "max_ask_records": 60,
+    # PDFs up to this many pages are sent to the AI as full documents (rich but
+    # token-hungry); longer ones fall back to locally extracted text (much cheaper).
+    "pdf_document_block_max_pages": 20,
 }
 
 
@@ -345,6 +348,34 @@ def fetch_link_meta(url: str) -> dict:
         return {}
 
 
+def prepare_image_for_ai(path: Path, mime: str):
+    """Downscale/recompress locally to what the API can actually use (max ~1568px
+    long edge). Slashes upload size and image tokens; the model sees the same thing.
+    Originals on disk are never touched."""
+    try:
+        import io
+
+        from PIL import Image, ImageOps
+        img = Image.open(path)
+        img = ImageOps.exif_transpose(img)
+        w, h = img.size
+        scale = 1568 / max(w, h)
+        if scale < 1:
+            img = img.resize((max(1, int(w * scale)), max(1, int(h * scale))))
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, "JPEG", quality=85)
+        data = buf.getvalue()
+        if len(data) < path.stat().st_size or path.stat().st_size > 4_500_000:
+            return base64.b64encode(data).decode(), "image/jpeg"
+    except Exception:
+        pass
+    if path.stat().st_size <= 4_500_000:
+        return base64.b64encode(path.read_bytes()).decode(), (mime or "image/png")
+    return None, None
+
+
 ANALYZABLE_TEXT_MIMES = ("text/plain", "text/markdown", "text/csv", "text/html")
 
 
@@ -367,6 +398,30 @@ def ai_available() -> bool:
     return bool(load_config().get("anthropic_api_key"))
 
 
+import threading
+
+_usage_lock = threading.Lock()
+
+
+def _track_usage(usage: dict):
+    """Best-effort token accounting, stored in config.json and shown in Settings."""
+    if not usage:
+        return
+    try:
+        with _usage_lock:
+            cfg = load_config()
+            u = cfg.get("usage") or {}
+            u["calls"] = u.get("calls", 0) + 1
+            u["input_tokens"] = u.get("input_tokens", 0) + usage.get("input_tokens", 0)
+            u["output_tokens"] = u.get("output_tokens", 0) + usage.get("output_tokens", 0)
+            u["cache_read_tokens"] = u.get("cache_read_tokens", 0) + usage.get("cache_read_input_tokens", 0)
+            u["cache_write_tokens"] = u.get("cache_write_tokens", 0) + usage.get("cache_creation_input_tokens", 0)
+            cfg["usage"] = u
+            save_config(cfg)
+    except Exception:
+        pass
+
+
 def call_claude(system: str, user_content, max_tokens: int = 1500, timeout: int = 120) -> str:
     cfg = load_config()
     key = cfg.get("anthropic_api_key")
@@ -382,7 +437,10 @@ def call_claude(system: str, user_content, max_tokens: int = 1500, timeout: int 
         json={
             "model": cfg.get("model", DEFAULT_CONFIG["model"]),
             "max_tokens": max_tokens,
-            "system": system,
+            # system prompts are stable across calls -> prompt caching makes the
+            # repeated portion ~90% cheaper and faster on subsequent calls
+            "system": [{"type": "text", "text": system,
+                        "cache_control": {"type": "ephemeral"}}],
             "messages": [{"role": "user", "content": user_content}],
         },
         timeout=timeout,
@@ -390,6 +448,7 @@ def call_claude(system: str, user_content, max_tokens: int = 1500, timeout: int 
     if resp.status_code != 200:
         raise RuntimeError(f"Anthropic API error {resp.status_code}: {resp.text[:300]}")
     data = resp.json()
+    _track_usage(data.get("usage") or {})
     return "".join(b.get("text", "") for b in data.get("content", []))
 
 
@@ -498,6 +557,10 @@ Your job:
    - Corroborating records from this module may pin down otherwise vague dates
      (overlapping conversations, same events). Cite them in your reasoning if used.
 3. Suggest a short title, tags, and any people/places/entities mentioned.
+4. cross_update_hint: true ONLY if this item clearly reveals something that changes
+   the meaning or context of one of the corroborating records listed in the metadata
+   (a breakup, a reversal, a correction, an outcome). Most items change nothing —
+   default false. If no corroborating records were provided, always false.
 
 Reply with ONLY a JSON object. EVERY field below is REQUIRED — never omit any of them.
 timestamp_score is the most important field in this system; if timestamp is not null,
@@ -508,7 +571,8 @@ timestamp_score MUST be an integer 1-10 (if timestamp is null, use 1):
  "timestamp_source": "content"|"metadata"|"upload",
  "timestamp_reasoning": str,
  "title": str, "description": str, "extracted_text": str,
- "tags": [str], "entities": [str]
+ "tags": [str], "entities": [str],
+ "cross_update_hint": bool
 }"""
 
 SCORE_FOLLOWUP_SYSTEM = """You scored nothing yet. Given how an archive item's date was
@@ -625,22 +689,26 @@ def analyze_record(record: dict, file_path: Optional[Path]) -> dict:
     mime = record.get("mime") or ""
     if file_path and file_path.exists():
         size = file_path.stat().st_size
-        if record["kind"] == "image" and size <= 4_500_000:
-            b64 = base64.b64encode(file_path.read_bytes()).decode()
-            content.append({
-                "type": "image",
-                "source": {"type": "base64", "media_type": mime or "image/png", "data": b64},
-            })
+        if record["kind"] == "image":
+            b64, media = prepare_image_for_ai(file_path, mime)
+            if b64:
+                content.append({
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": media, "data": b64},
+                })
         elif mime == "application/pdf":
-            # The API caps PDFs (~100 pages / size). Send the raw document when it
-            # fits; otherwise fall back to locally extracted text.
+            # Short PDFs go to the AI as full documents (rich, sees diagrams/scans).
+            # Long ones cost thousands of tokens per page, so beyond the configured
+            # page threshold we fall back to locally extracted text. Tune via
+            # "pdf_document_block_max_pages" in config.json.
             pages = None
             try:
                 from pypdf import PdfReader
                 pages = len(PdfReader(str(file_path)).pages)
             except Exception:
                 pass
-            if size <= 15_000_000 and (pages is None or pages <= 90):
+            page_cap = int(load_config().get("pdf_document_block_max_pages", 20))
+            if size <= 15_000_000 and (pages is None or pages <= page_cap):
                 b64 = base64.b64encode(file_path.read_bytes()).decode()
                 content.append({
                     "type": "document",
@@ -651,8 +719,8 @@ def analyze_record(record: dict, file_path: Optional[Path]) -> dict:
                     from pypdf import PdfReader
                     reader = PdfReader(str(file_path))
                     text = "\n".join((p.extract_text() or "") for p in reader.pages[:150])
-                    meta += (f"\n\nThis PDF is too large to attach ({pages} pages). "
-                             f"Extracted text (first 150 pages):\n" + text[:30_000])
+                    meta += (f"\n\nThis PDF ({pages} pages) exceeds the attach threshold, "
+                             f"so here is its extracted text:\n" + text[:30_000])
                 except Exception as e:
                     meta += f"\n\n(PDF too large to attach and text extraction failed: {e})"
         elif mime in ANALYZABLE_TEXT_MIMES and size <= 2_000_000:
@@ -794,7 +862,7 @@ def run_amendment_pass(new_rid: str) -> int:
     conn = db()
     others = [row_to_record(r) for r in conn.execute(
         """SELECT * FROM records WHERE module_id=? AND id!=? AND description!=''
-           ORDER BY created_at DESC LIMIT 40""", (rec["module_id"], new_rid))]
+           ORDER BY created_at DESC LIMIT 25""", (rec["module_id"], new_rid))]
     fb = conn.execute(
         """SELECT added_text, reason, verdict FROM amendments
            WHERE verdict IN ('up','down') ORDER BY created_at DESC LIMIT 6""").fetchall()
@@ -964,7 +1032,7 @@ def ask_ai(question: str, module_id: Optional[str]) -> dict:
             "kind": c["kind"],
             "title": c["title"],
             "description": (c["description"] or "")[:300],
-            "text": (c["body"] or "")[:500],
+            "text": (c["body"] or "")[:350],
             "user_context": (c["user_context"] or "")[:200],
             "timestamp": c["ts_effective"],
         }))
@@ -1082,7 +1150,8 @@ def get_settings():
     cfg = load_config()
     key = cfg.get("anthropic_api_key", "")
     return {"model": cfg.get("model"), "has_key": bool(key),
-            "key_preview": (key[:10] + "…") if key else ""}
+            "key_preview": (key[:10] + "…") if key else "",
+            "usage": cfg.get("usage") or {}}
 
 
 @app.post("/api/settings")
@@ -1368,10 +1437,13 @@ def upload(  # sync on purpose: runs in the threadpool so long AI calls never bl
             rec = get_record(rid)
             ai_result = analyze_record(rec, dest)
             apply_analysis(rid, ai_result, manual)
-            try:
-                amended = run_amendment_pass(rid)
-            except Exception:
-                pass
+            # skip the (expensive) amendment pass when analysis explicitly saw
+            # nothing that would update earlier records; run it otherwise
+            if ai_result.get("cross_update_hint") is not False:
+                try:
+                    amended = run_amendment_pass(rid)
+                except Exception:
+                    pass
         except Exception as e:
             ai_error = str(e)
             persist_ai_error(rid, ai_error)
@@ -1416,10 +1488,11 @@ def create_note(n: NoteIn):
             rec = get_record(rid)
             result = analyze_record(rec, None)
             apply_analysis(rid, result, manual)
-            try:
-                amended = run_amendment_pass(rid)
-            except Exception:
-                pass
+            if result.get("cross_update_hint") is not False:
+                try:
+                    amended = run_amendment_pass(rid)
+                except Exception:
+                    pass
         except Exception:
             pass
     out = get_record(rid)

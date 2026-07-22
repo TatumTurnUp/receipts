@@ -60,6 +60,13 @@ holds their irreplaceable personal archive. Convenience never outranks preservat
   (document blocks / inline text), not just images.
 - AI layer is intentionally thin: `call_claude()` in app.py is the ONLY place
   that talks to a model. Anthropic API today.
+- Efficiency layer (don't undo these): system prompts use prompt caching
+  (`cache_control: ephemeral`); images are downscaled locally to ≤1568px JPEG
+  before sending (originals untouched); PDFs over
+  `pdf_document_block_max_pages` (config, default 20) fall back to extracted
+  text instead of document blocks; the amendment pass only runs when analysis
+  returns `cross_update_hint != false`; token usage accumulates in config.json
+  `usage` and shows in Settings.
 
 ## Owner's roadmap (context for future sessions)
 

@@ -1164,6 +1164,9 @@ async function openSettings(){
     <input id="s-key" type="password" placeholder="${s.has_key? "•••••••• (leave blank to keep current)":"sk-ant-…"}">
     <label>Model</label>
     <select id="s-model">${opts}</select>
+    ${(u=>u.calls? `<div class="kv" style="margin-top:14px"><b>AI usage so far:</b> ${u.calls.toLocaleString()} calls ·
+      ${((u.input_tokens||0)/1e6).toFixed(2)}M tokens in / ${((u.output_tokens||0)/1e6).toFixed(2)}M out
+      ${u.cache_read_tokens?` · ${((u.cache_read_tokens)/1e6).toFixed(2)}M served from cache (~90% off)`:""}</div>`:"")(s.usage||{})}
     <div class="m-actions">
     <button class="btn" onclick="restartApp()" title="Reload the server after a code update — your data is untouched">⟳ Restart app</button>
     <button class="btn" onclick="closeModal()">Cancel</button>
