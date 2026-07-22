@@ -398,17 +398,36 @@ def parse_json_block(text: str) -> dict:
     if start == -1:
         return {}
     depth = 0
+    in_str = False
+    esc_next = False
     for i in range(start, len(text)):
-        if text[i] == "{":
-            depth += 1
-        elif text[i] == "}":
-            depth -= 1
-            if depth == 0:
-                try:
-                    return json.loads(text[start : i + 1])
-                except Exception:
-                    return {}
-    return {}
+        c = text[i]
+        if esc_next:
+            esc_next = False
+            continue
+        if c == "\\":
+            esc_next = True
+        elif c == '"':
+            in_str = not in_str
+        elif not in_str:
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[start : i + 1])
+                    except Exception:
+                        return {}
+    # reply was truncated mid-object — repair by closing open string/braces
+    candidate = text[start:].rstrip()
+    candidate = re.sub(r",\s*\"[^\"]*$", "", candidate)  # drop a half-written key
+    if in_str and candidate.count('"') % 2 == 1:
+        candidate += '"'
+    try:
+        return json.loads(candidate + "}" * max(depth, 1))
+    except Exception:
+        return {}
 
 
 ANALYZE_SYSTEM = """You are the ingestion engine for someone's personal receipts archive.
@@ -429,7 +448,11 @@ VOICE — very important:
   module looks consistent.
 
 Your job:
-1. Describe what the item is and transcribe ALL legible text in it (messages, tweets, captions, dates, usernames).
+1. Describe what the item is. For extracted_text: short items (screenshots, messages,
+   tweets) get a FULL transcription of all legible text. Long documents (manuals,
+   reports, spec sheets) get the important substance — specs, tables, model numbers,
+   key sections, names, dates — condensed to at most ~2500 words. Never let
+   extracted_text run so long that your reply gets cut off.
 2. Determine the best timestamp for WHEN THE CONTENT HAPPENED (not when it was uploaded),
    and score your confidence on a strict 1-10 scale. The score measures HOW DIRECTLY
    the date is evidenced — not how hard you worked for it:
@@ -613,7 +636,7 @@ def analyze_record(record: dict, file_path: Optional[Path]) -> dict:
                  "Focus on the description, extracted text, and tags.")
     content.append({"type": "text", "text": f"Item metadata:\n{meta}\n\nAnalyze this item."})
 
-    raw = call_claude(ANALYZE_SYSTEM, content, timeout=300)
+    raw = call_claude(ANALYZE_SYSTEM, content, max_tokens=8000, timeout=300)
     result = parse_json_block(raw)
     if not result:
         raise RuntimeError(f"AI returned unparseable output: {raw[:200]}")
@@ -624,7 +647,9 @@ def persist_ai_error(record_id: str, error: str):
     """Store an analysis failure on the record so it's visible, not just a toast."""
     try:
         conn = db()
-        conn.execute("UPDATE records SET ai_json=? WHERE id=? AND ai_json='{}'",
+        # record the failure without clobbering a previous successful analysis
+        conn.execute("""UPDATE records SET ai_json=? WHERE id=?
+                        AND (ai_json='{}' OR ai_json LIKE '{"error%')""",
                      (json.dumps({"error": error[:500]}), record_id))
         conn.commit()
         conn.close()
