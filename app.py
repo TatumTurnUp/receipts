@@ -588,6 +588,19 @@ def analyze_record(record: dict, file_path: Optional[Path]) -> dict:
     if evidence:
         meta_lines.append("Other records in this module (corroborating evidence for dating):")
         meta_lines += evidence
+    # learn the owner's preferred title style from their past renames
+    conn = db()
+    renames = conn.execute(
+        """SELECT old_value, new_value FROM change_log
+           WHERE entity_type='record' AND field='title' AND actor='you'
+             AND old_value != '' AND new_value != ''
+           ORDER BY created_at DESC LIMIT 5""").fetchall()
+    conn.close()
+    if renames:
+        meta_lines.append("The owner has renamed AI-generated titles before. Match their "
+                          "preferred style (AI's title -> what the owner renamed it to):")
+        for rn in renames:
+            meta_lines.append(f'  "{rn["old_value"][:80]}" -> "{rn["new_value"][:80]}"')
     if file_path and file_path.exists():
         meta_lines.append(f"File name: {record.get('original_name') or file_path.name}")
         ex = exif_datetime(file_path)
@@ -725,6 +738,21 @@ def apply_analysis(record_id: str, result: dict, manual_ts: Optional[str]):
         conn.commit()
     conn.close()
     lbl = result.get("title") or r["title"] or r["original_name"] or "Untitled"
+    if result.get("title") and not r["title"]:
+        log_change("record", record_id, "title", r["title"], result["title"][:200],
+                   actor="ai", note="Title from AI analysis",
+                   module_id=r["module_id"], label=lbl)
+    if result.get("tags"):
+        old_tags = r["tags_json"] or "[]"
+        new_tags = json.dumps(result["tags"][:15])
+        if new_tags != old_tags:
+            log_change("record", record_id, "tags", old_tags, new_tags,
+                       actor="ai", note="Tags from AI analysis",
+                       module_id=r["module_id"], label=lbl)
+    if result.get("extracted_text") and (r["kind"] == "image" or (r["kind"] == "file" and not r["body"])):
+        log_change("record", record_id, "body", r["body"], result["extracted_text"],
+                   actor="ai", note="Extracted text / search index from AI analysis",
+                   module_id=r["module_id"], label=lbl)
     if result.get("description") and result["description"] != r["description"]:
         log_change("record", record_id, "description", r["description"],
                    result["description"], actor="ai", note="AI analysis",
@@ -1094,6 +1122,8 @@ def create_module(m: ModuleIn):
     )
     conn.commit()
     conn.close()
+    log_change("module", mid, "created", "", m.name.strip(),
+               note=f"Created ({m.type})", module_id=mid, label=m.name.strip())
     return {"id": mid}
 
 
