@@ -167,6 +167,8 @@ h2{font-size:16px;margin:22px 0 10px}
 .lprev .lp-s{color:var(--dim);font-size:11px;margin-top:2px}
 .ctx-box{background:rgba(91,141,239,.08);border:1px solid rgba(91,141,239,.3);border-radius:10px;padding:10px 12px;font-size:13px;margin:6px 0 12px}
 .ctx-box b{color:var(--accent2)}
+.t-edit{opacity:0;transition:opacity .15s;font-size:14px;vertical-align:2px}
+.modal h3:hover .t-edit{opacity:1}
 
 /* timestamp confidence score */
 .score{display:inline-flex;align-items:center;justify-content:center;min-width:21px;height:19px;border-radius:6px;font-size:11px;font-weight:800;padding:0 4px;cursor:help}
@@ -969,7 +971,8 @@ async function openDetail(id){
   const extractedBlock = "";
   const aiErrBox = (r.ai && r.ai.error)
     ? `<div class="flag" style="border-color:rgba(229,83,75,.5);background:rgba(229,83,75,.08)">⚠️ AI analysis failed: ${esc(r.ai.error.slice(0,200))} — hit <b>Re-analyze</b> below.</div>` : "";
-  modal(`<h3>${esc(r.title||r.original_name||"Record")}</h3>
+  modal(`<h3 id="d-h3"><span id="d-title-text">${esc(r.title||r.original_name||"Record")}</span>
+      <button class="icon-btn t-edit" title="Edit title" onclick="editTitle('${r.id}')">✏️</button></h3>
     ${r.user_context? `<div class="ctx-box"><b>Your context:</b> ${esc(r.user_context)}</div>`:""}
     ${contentBlock}
     ${aiErrBox}
@@ -999,6 +1002,22 @@ async function openHistory(id){
     <div class="sub" style="margin-bottom:10px">Every change to this record, by you or the AI. Nothing is ever silently overwritten.</div>
     ${rows}
     <div class="m-actions"><button class="btn primary" onclick="closeModal();openDetail('${id}')">← Back to record</button></div>`);
+}
+function editTitle(id){
+  const cur=$("d-title-text").textContent;
+  $("d-h3").innerHTML=`<div class="row">
+    <input id="d-title-in" value="${esc(cur)}" onkeydown="if(event.key==='Enter')saveTitle('${id}');if(event.key==='Escape'){closeModal();openDetail('${id}')}">
+    <button class="btn primary" style="flex:0" onclick="saveTitle('${id}')">Save</button>
+    <button class="btn" style="flex:0" onclick="closeModal();openDetail('${id}')">Cancel</button></div>`;
+  const inp=$("d-title-in"); inp.focus(); inp.select();
+}
+async function saveTitle(id){
+  const v=$("d-title-in").value.trim();
+  if(!v){toast("Title can't be empty");return;}
+  await jpost("/records/"+id,{title:v},"PATCH");
+  toast("Title updated — the AI will learn your naming style.");
+  closeModal(); openDetail(id);
+  state.moduleId? refreshRecords() : showHome();
 }
 async function setManualTs(id){
   const v=readDateInput("d"); if(!v){toast("Pick a date first");return;}
