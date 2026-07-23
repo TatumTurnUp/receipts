@@ -91,6 +91,22 @@ holds their irreplaceable personal archive. Convenience never outranks preservat
   delete automatically.
 - Model usage fallback (auto-downgrade to cheaper model at high usage) — owner
   mentioned, low priority.
+- **AI module summary card (owner's likely next build):** a living summary
+  component inside each module, updated in real time as uploads are processed.
+  Key ideas from the owner:
+  - CONTEXT WEIGHT is central: frequency of reference determines inclusion.
+    Ten records about Bitcoin mining -> it's part of the summary; a single
+    stray Ethereum mention -> the AI should reason "only mentioned once,
+    not a big part of this person's life" and leave it out.
+  - NOT a text blob. A designed, personalized card like a modern website
+    section — e.g. a user-uploaded photo of Laura's two dogs, captioned
+    "Laura and Cooper's dogs, Ziggy and Vinny", where the AI inferred which
+    dog is which and that they matter from many references across uploads,
+    and chose that photo itself.
+  - The "✨ AI summary" button next to the module name is the placeholder
+    entry point (WIP modal for now).
+  - Expect this to be a contained UI overhaul; the owner is also mulling a
+    broader UI overhaul — stabilize/stress-test existing features first.
 - **Custom LLM instructions:** owner wants to explore a client-side setting for
   global custom AI instructions (style/voice preferences), and possibly
   per-module instructions/context on top. Note: description voice + extracted-
