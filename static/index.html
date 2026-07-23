@@ -181,6 +181,23 @@ h2{font-size:16px;margin:22px 0 10px}
 .side-tag{display:inline-block;background:var(--bg3);border:1px solid var(--line);border-radius:14px;padding:2px 9px;font-size:11.5px;color:var(--dim);cursor:pointer;margin:2px 2px 2px 0}
 .side-tag.on{border-color:var(--accent);color:var(--accent)}
 
+/* themed autocomplete dropdown */
+.ac-wrap{position:relative;display:inline-block}
+.ac-list{position:absolute;top:calc(100% + 4px);left:0;min-width:170px;max-height:190px;overflow-y:auto;background:var(--bg2);border:1px solid var(--line);border-radius:10px;z-index:80;box-shadow:0 8px 20px rgba(0,0,0,.5)}
+.ac-item{padding:7px 12px;font-size:12.5px;cursor:pointer}
+.ac-item:hover{background:var(--bg3);color:var(--accent2)}
+
+/* wand suggestions (+ add on left, ✕ dismiss on right) */
+.wand-sug .ws-add{cursor:pointer;font-weight:800;padding:0 3px}
+.wand-sug .ws-add:hover{color:var(--green)}
+.wand-sug .ws-x{cursor:pointer;padding:0 3px}
+.wand-sug .ws-x:hover{color:var(--red)}
+.wand-btn{cursor:pointer;font-size:13px;text-transform:none;letter-spacing:0}
+.wand-btn:hover{filter:brightness(1.4)}
+
+/* themed confirm dialog */
+.danger-solid{background:var(--red)!important;color:#fff!important;border-color:var(--red)!important;font-weight:600}
+
 /* timestamp confidence score */
 .score{display:inline-flex;align-items:center;justify-content:center;min-width:21px;height:19px;border-radius:6px;font-size:11px;font-weight:800;padding:0 4px;cursor:help}
 .s-r{background:rgba(229,83,75,.18);color:var(--red);border:1px solid rgba(229,83,75,.4)}
@@ -325,6 +342,7 @@ h2{font-size:16px;margin:22px 0 10px}
 </div>
 
 <div id="modal-root"></div>
+<div id="confirm-root"></div>
 <div id="toast-root"></div>
 
 <script>
@@ -359,7 +377,45 @@ const MODELS = [
   ["claude-haiku-4-5-20251001","Haiku — cheapest"]
 ];
 
-let state = {modules:[], moduleId:null, module:null, aiOn:false, tagFilter:new Set(), tagSugs:[]};
+let state = {modules:[], moduleId:null, module:null, aiOn:false, tagFilter:new Set(), tagSugs:[],
+             allTags:[], wandSugs:[], wandLoading:false};
+const STARTER_TAGS = ["family","work","travel","important modules","twitter beef","will age like milk"];
+
+/* themed replacement for browser confirm() */
+function uiConfirm(msg, yesLabel="Yes, do it"){
+  return new Promise(res=>{
+    $("confirm-root").innerHTML = `<div class="overlay" style="z-index:75" onclick="if(event.target===this){this.parentNode.innerHTML='';}">
+      <div class="modal" style="max-width:400px;margin-top:20vh">
+        <div style="font-size:14.5px;line-height:1.55">${msg}</div>
+        <div class="m-actions">
+          <button class="btn" id="cf-no">Cancel</button>
+          <button class="btn danger-solid" id="cf-yes">${yesLabel}</button>
+        </div></div></div>`;
+    $("cf-no").onclick = ()=>{ $("confirm-root").innerHTML=""; res(false); };
+    $("cf-yes").onclick = ()=>{ $("confirm-root").innerHTML=""; res(true); };
+  });
+}
+
+/* themed autocomplete over existing tags; clicking an item adds it immediately */
+function mountTagAC(inp, list, getExclude, onPick){
+  function render(){
+    const q = inp.value.trim().toLowerCase();
+    const ex = new Set(getExclude().map(x=>x.toLowerCase()));
+    const items = (state.allTags||[]).filter(t=>!ex.has(t.toLowerCase()) && t.toLowerCase().includes(q)).slice(0,8);
+    if(!items.length){ list.classList.add("hidden"); return; }
+    list.innerHTML = "";
+    for(const t of items){
+      const d = document.createElement("div");
+      d.className = "ac-item"; d.textContent = t;
+      d.addEventListener("mousedown", e=>{ e.preventDefault(); inp.value=""; onPick(t); render(); });
+      list.appendChild(d);
+    }
+    list.classList.remove("hidden");
+  }
+  inp.addEventListener("input", render);
+  inp.addEventListener("focus", render);
+  inp.addEventListener("blur", ()=>setTimeout(()=>list.classList.add("hidden"),120));
+}
 
 const $ = id => document.getElementById(id);
 const esc = s => (s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -403,18 +459,28 @@ function readDateInput(prefix){
 
 /* ---------------- sidebar ---------------- */
 async function loadModules(){
-  state.modules = await api("/modules");
-  // tag filter chips
-  const allTags = [...new Set(state.modules.flatMap(m=>m.tags||[]))].sort((a,b)=>a.toLowerCase().localeCompare(b.toLowerCase()));
-  for(const t of [...state.tagFilter]) if(!allTags.includes(t)) state.tagFilter.delete(t);
-  let html="";
-  if(allTags.length){
-    html += `<div class="side-head"><span>Tags</span>${state.tagFilter.size?`<span style="cursor:pointer" onclick="clearTagFilter()">clear</span>`:""}</div><div style="padding:0 4px">`;
-    html += allTags.map(t=>`<span class="side-tag ${state.tagFilter.has(t)?'on':''}" onclick="toggleTagFilter('${esc(t)}')">${esc(t)}</span>`).join("");
-    html += `</div>`;
+  const [mods, tags] = await Promise.all([api("/modules"), api("/tags")]);
+  state.modules = mods; state.allTags = tags;
+  for(const t of [...state.tagFilter]) if(!tags.includes(t)) state.tagFilter.delete(t);
+  let html = `<div class="side-head"><span>Tags</span><span>
+      ${state.tagFilter.size?`<span style="cursor:pointer" onclick="clearTagFilter()">clear</span>&nbsp;`:""}
+      <span class="wand-btn" title="AI: suggest new tags from your archive" onclick="wandSuggest()">🪄</span>
+    </span></div><div style="padding:0 4px 4px">`;
+  if(tags.length){
+    html += tags.map(t=>`<span class="side-tag ${state.tagFilter.has(t)?'on':''}" onclick="toggleTagFilter('${esc(t)}')">${esc(t)}</span>`).join("");
+  } else {
+    html += STARTER_TAGS.map(t=>`<span class="tag-sug" title="Example — click to create this tag" onclick="starterAdd('${esc(t)}')">＋ ${esc(t)}</span>`).join(" ");
   }
+  if(state.wandLoading) html += `<div class="sub" style="padding:4px 0"><span class="spin"></span>reading your archive…</div>`;
+  if(state.wandSugs.length){
+    html += `<div style="margin-top:5px">` + state.wandSugs.map(t=>
+      `<span class="tag-sug wand-sug"><span class="ws-add" title="Add this tag" onclick="wandAdd('${esc(t)}')">＋</span><span style="margin:0 2px">${esc(t)}</span><span class="ws-x" title="Dismiss" onclick="wandDismiss('${esc(t)}')">✕</span></span>`
+    ).join(" ") + `</div>`;
+  }
+  html += `</div>`;
+  // AND semantics: a module must carry EVERY selected tag
   const visible = state.tagFilter.size
-    ? state.modules.filter(m=>(m.tags||[]).some(t=>state.tagFilter.has(t)))
+    ? state.modules.filter(m=>[...state.tagFilter].every(t=>(m.tags||[]).includes(t)))
     : state.modules;
   const byType={};
   for(const m of visible) (byType[m.type]=byType[m.type]||[]).push(m);
@@ -435,6 +501,28 @@ function toggleTagFilter(t){
   if(!state.moduleId && !$("view-home").classList.contains("hidden")) showHome();
 }
 function clearTagFilter(){ state.tagFilter.clear(); loadModules(); }
+async function starterAdd(t){
+  await jpost("/tags",{name:t});
+  toast(`Tag "${esc(t)}" created — attach it to modules whenever.`);
+  loadModules();
+}
+async function wandSuggest(){
+  if(state.wandLoading) return;
+  state.wandLoading=true; loadModules();
+  try{
+    const r=await api("/tag_wand");
+    state.wandSugs=r.suggestions||[];
+    if(!state.wandSugs.length) toast("The AI couldn't find anything new to suggest.");
+  }catch(e){ toast("🪄 "+esc(e.message)); }
+  state.wandLoading=false; loadModules();
+}
+async function wandAdd(t){
+  await jpost("/tags",{name:t});
+  state.wandSugs=state.wandSugs.filter(x=>x!==t);
+  toast(`Tag "${esc(t)}" added.`);
+  loadModules();
+}
+function wandDismiss(t){ state.wandSugs=state.wandSugs.filter(x=>x!==t); loadModules(); }
 
 /* ---------------- home ---------------- */
 function fmtBytes(b){
@@ -471,7 +559,7 @@ async function showHome(){
   $("maudit").classList.add("hidden");
   await loadModules();
   const homeMods = state.tagFilter.size
-    ? state.modules.filter(m=>(m.tags||[]).some(t=>state.tagFilter.has(t)))
+    ? state.modules.filter(m=>[...state.tagFilter].every(t=>(m.tags||[]).includes(t)))
     : state.modules;
   $("home-recent").innerHTML = (homeMods.length? homeMods.map(moduleCardHtml).join("") : "") +
     `<div class="card" onclick="openNewModule()" style="border-style:dashed">
@@ -522,19 +610,17 @@ function renderModuleTags(){
     (m.tags||[]).map(t=>`<span class="tagchip">${esc(t)}<span class="x" title="Remove tag" onclick="removeModuleTag('${esc(t)}')">✕</span></span>`).join("") +
     sugs.map(t=>`<span class="tag-sug" title="Suggested — click to add" onclick="addModuleTags(['${esc(t)}'])">＋ ${esc(t)}</span>`).join("") +
     `<span class="tag-add" title="Add tag" onclick="showTagInput()">＋</span>
-     <span id="m-tag-in-wrap" class="hidden">
-       <input id="m-tag-in" list="known-tags" placeholder="tag name…" style="width:140px;padding:4px 10px;border-radius:14px;font-size:12px"
+     <span id="m-tag-in-wrap" class="hidden ac-wrap">
+       <input id="m-tag-in" placeholder="tag name…" style="width:150px;padding:4px 10px;border-radius:14px;font-size:12px"
          onkeydown="if(event.key==='Enter')commitTagInput();if(event.key==='Escape')renderModuleTags()">
-     </span>
-     <datalist id="known-tags"></datalist>`;
+       <div id="m-tag-ac" class="ac-list hidden"></div>
+     </span>`;
 }
-async function showTagInput(){
+function showTagInput(){
   $("m-tag-in-wrap").classList.remove("hidden");
-  const inp=$("m-tag-in"); inp.focus();
-  try{
-    const tags=await api("/tags");
-    $("known-tags").innerHTML = tags.map(t=>`<option value="${esc(t)}">`).join("");
-  }catch(e){}
+  const inp=$("m-tag-in");
+  mountTagAC(inp, $("m-tag-ac"), ()=>state.module.tags||[], t=>addModuleTags([t]));
+  inp.focus();
 }
 function commitTagInput(){
   const v=$("m-tag-in").value.trim();
@@ -547,7 +633,7 @@ async function addModuleTags(tags){
   renderModuleTags(); loadModules();
 }
 async function removeModuleTag(tag){
-  if(!confirm(`Remove the tag "${tag}" from ${state.module.name}?`)) return;
+  if(!await uiConfirm(`Remove the tag <b>"${esc(tag)}"</b> from ${esc(state.module.name)}?`, "Remove tag")) return;
   const r=await jpost(`/modules/${state.moduleId}/tags`,{remove:[tag]});
   state.module.tags=r.tags;
   renderModuleTags(); loadModules();
@@ -689,6 +775,9 @@ function auditSentence(e){
   const who = e.actor==="ai"? `<b class="aud-actor-ai">AI</b>` : e.actor==="system"? "<b>System</b>" : `<b class="aud-actor-you">You</b>`;
   const label = esc(e.cur_title || e.entity_label || e.cur_file || "a record");
   const L = `“${label}”`;
+  if(e.entity_type==="tag"){
+    return `${who} created the tag “${esc(e.entity_label||e.new_value)}”`;
+  }
   if(e.entity_type==="module"){
     if(e.field==="created") return `${who} created this module`;
     if(e.field==="deleted") return `${who} deleted module ${L}`;
@@ -772,11 +861,14 @@ function moduleModal(m){
     <label>Type</label><div class="preset-grid" id="preset-grid" ${m?'style="pointer-events:none;opacity:.6"':''}>${presets}</div>
     <label>Name</label><input id="nm-name" placeholder="${esc(NAME_PLACEHOLDER[type])}" value="${m?esc(m.name):""}">
     <div id="nm-fields"></div>
-    ${m? "" : `<label>Tags (optional — for filtering modules in the sidebar; press Enter to add)</label>
+    ${m? "" : `<label>Tags (optional — for filtering modules in the sidebar)</label>
     <div id="nm-tags" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:4px"></div>
-    <input id="nm-tag-in" list="nm-known-tags" placeholder="e.g. friend, work, bitcoin…"
-      onkeydown="if(event.key==='Enter'){event.preventDefault();nmAddTag()}">
-    <datalist id="nm-known-tags"></datalist>`}
+    <div id="nm-sugs" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px"></div>
+    <span class="ac-wrap" style="display:block">
+      <input id="nm-tag-in" placeholder="type a tag, press Enter — or click a suggestion above"
+        onkeydown="if(event.key==='Enter'){event.preventDefault();nmAddTag()}">
+      <div id="nm-tag-ac" class="ac-list hidden"></div>
+    </span>`}
     <label>Notes — context the AI uses when reading and searching this module</label>
     <textarea id="nm-notes" rows="4" placeholder="${esc(NOTES_PLACEHOLDER[type])}">${m?esc(m.notes):""}</textarea>
     <div class="m-actions"><button class="btn" onclick="closeModal()">Cancel</button>
@@ -784,19 +876,34 @@ function moduleModal(m){
   renderPresetFields(type, m? m.fields : {});
   if(!m){
     nmTags=[]; nmRenderTags();
-    api("/tags").then(ts=>{ const d=$("nm-known-tags"); if(d) d.innerHTML=ts.map(t=>`<option value="${esc(t)}">`).join(""); }).catch(()=>{});
+    api("/tags").then(ts=>{
+      state.allTags=ts; nmRenderSugs();
+      mountTagAC($("nm-tag-in"), $("nm-tag-ac"), ()=>nmTags, t=>{
+        if(!nmTags.includes(t)) nmTags.push(t);
+        nmRenderTags(); nmRenderSugs();
+      });
+    }).catch(()=>{});
   }
 }
 let nmTags=[];
 function nmAddTag(){
   const inp=$("nm-tag-in"), v=inp.value.trim();
   if(v && !nmTags.includes(v)) nmTags.push(v);
-  inp.value=""; nmRenderTags();
+  inp.value=""; nmRenderTags(); nmRenderSugs();
 }
-function nmRemoveTag(t){ nmTags=nmTags.filter(x=>x!==t); nmRenderTags(); }
+function nmRemoveTag(t){ nmTags=nmTags.filter(x=>x!==t); nmRenderTags(); nmRenderSugs(); }
 function nmRenderTags(){
   const el=$("nm-tags"); if(!el) return;
   el.innerHTML = nmTags.map(t=>`<span class="tagchip">${esc(t)}<span class="x" onclick="nmRemoveTag('${esc(t)}')">✕</span></span>`).join("");
+}
+function nmRenderSugs(){
+  const el=$("nm-sugs"); if(!el) return;
+  const sugs=(state.allTags||[]).filter(t=>!nmTags.includes(t)).slice(0,6);
+  el.innerHTML = sugs.map(t=>`<span class="tag-sug" title="Existing tag — click to add" onclick="nmAddExisting('${esc(t)}')">＋ ${esc(t)}</span>`).join("");
+}
+function nmAddExisting(t){
+  if(!nmTags.includes(t)) nmTags.push(t);
+  nmRenderTags(); nmRenderSugs();
 }
 function pickPreset(el){
   document.querySelectorAll(".preset").forEach(p=>p.classList.remove("sel"));
@@ -824,7 +931,7 @@ async function saveModule(id){
   }
 }
 async function deleteModule(){
-  if(!confirm(`Delete "${state.module.name}" and ALL its records? This cannot be undone.`)) return;
+  if(!await uiConfirm(`Delete <b>"${esc(state.module.name)}"</b> and ALL its records? This cannot be undone.`, "Delete module")) return;
   await api("/modules/"+state.moduleId, {method:"DELETE"});
   showHome();
 }
@@ -1146,7 +1253,7 @@ async function reanalyze(id){
   state.moduleId? refreshRecords() : showHome();
 }
 async function deleteRecord(id){
-  if(!confirm("Delete this record?")) return;
+  if(!await uiConfirm("Delete this record? A snapshot stays in the audit log, but the file and record are removed.", "Delete record")) return;
   await api("/records/"+id,{method:"DELETE"});
   closeModal(); state.moduleId? refreshRecords():showHome(); loadModules();
 }
@@ -1173,7 +1280,7 @@ async function openSettings(){
     <button class="btn primary" onclick="saveSettings()">Save</button></div>`);
 }
 async function restartApp(){
-  if(!confirm("Restart the app? Takes a few seconds — your data is untouched. Use this after an update to load new code.")) return;
+  if(!await uiConfirm("Restart the app? Takes a few seconds — your data is untouched. Use this after an update to load new code.", "Restart")) return;
   try{ await jpost("/restart",{}); }
   catch(e){
     toast("⚠️ The running server is on old code and doesn't understand the restart command. One-time fix in a terminal: <b>fuser -k 8765/tcp</b> — then relaunch from your icon.", 12000);

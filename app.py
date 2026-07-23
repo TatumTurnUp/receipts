@@ -74,7 +74,7 @@ def db() -> sqlite3.Connection:
 # receipts-data/backups/ (one per day, last 14 kept) so no update can
 # silently destroy history.
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 MIGRATIONS: dict = {
     # v4: audit entries remember their module and a human label, so the
@@ -105,8 +105,12 @@ MIGRATIONS: dict = {
     7: [
         "ALTER TABLE modules ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'",
     ],
+    # v8: standalone tag registry — tags exist independently of modules so
+    # approved suggestions live on with zero modules attached. (Table itself is
+    # created in init_db; backfill from modules happens there too.)
+    8: [],
     # future example:
-    # 8: ["ALTER TABLE modules ADD COLUMN brings_joy INTEGER NOT NULL DEFAULT 0"],
+    # 9: ["ALTER TABLE modules ADD COLUMN brings_joy INTEGER NOT NULL DEFAULT 0"],
 }
 
 
@@ -175,6 +179,11 @@ def init_db():
             created_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS tags (
+            name TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS change_log (
             id TEXT PRIMARY KEY,
             entity_type TEXT NOT NULL,   -- record|module
@@ -224,6 +233,14 @@ def init_db():
         """
     )
     migrate(conn)
+    # backfill the tag registry from any tags already living on modules
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        for row in conn.execute("SELECT tags_json FROM modules").fetchall():
+            for t in json.loads(row["tags_json"] or "[]"):
+                conn.execute("INSERT OR IGNORE INTO tags (name, created_at) VALUES (?,?)", (t, now))
+    except Exception:
+        pass
     conn.commit()
     conn.close()
 
@@ -1190,6 +1207,7 @@ def create_module(m: ModuleIn):
     mid = new_id()
     conn = db()
     tags = [t.strip() for t in (m.tags or []) if t.strip()][:30]
+    register_tags(tags)
     conn.execute(
         "INSERT INTO modules (id,name,type,fields_json,notes,tags_json,created_at) VALUES (?,?,?,?,?,?,?)",
         (mid, m.name.strip(), m.type, json.dumps(m.fields), m.notes, json.dumps(tags), now_iso()),
@@ -1234,6 +1252,7 @@ def module_tags(mid: str, t: ModuleTagsIn):
     new = new[:30]
     if new == old:
         return {"tags": old}
+    register_tags(t.add)
     conn = db()
     conn.execute("UPDATE modules SET tags_json=? WHERE id=?", (json.dumps(new), mid))
     conn.commit()
@@ -1268,54 +1287,101 @@ def module_tags(mid: str, t: ModuleTagsIn):
     return {"tags": new}
 
 
+def register_tags(names: list):
+    """Every tag lives in the registry, whether or not any module carries it."""
+    names = [n.strip() for n in (names or []) if n and n.strip()]
+    if not names:
+        return
+    conn = db()
+    for n in names:
+        conn.execute("INSERT OR IGNORE INTO tags (name, created_at) VALUES (?,?)", (n, now_iso()))
+    conn.commit()
+    conn.close()
+
+
 @app.get("/api/tags")
 def all_tags():
     conn = db()
-    rows = conn.execute("SELECT tags_json FROM modules").fetchall()
-    conn.close()
-    tags = set()
-    for r in rows:
+    tags = set(r["name"] for r in conn.execute("SELECT name FROM tags").fetchall())
+    for r in conn.execute("SELECT tags_json FROM modules").fetchall():
         tags.update(json.loads(r["tags_json"] or "[]"))
+    conn.close()
     return sorted(tags, key=str.lower)
 
 
-DEFAULT_TAG_SUGGESTIONS = ["friend", "family", "work", "important", "archive",
-                           "hobby", "finance", "travel", "health", "investigation"]
+class TagCreateIn(BaseModel):
+    name: str
+
+
+@app.post("/api/tags")
+def create_tag(t: TagCreateIn):
+    name = t.name.strip()
+    if not name:
+        raise HTTPException(400, "Empty tag")
+    existed = name in all_tags()
+    register_tags([name])
+    if not existed:
+        log_change("tag", name, "created", "", name,
+                   note="Tag created (no modules attached yet)", label=name)
+    return {"ok": True, "name": name}
 
 
 @app.get("/api/modules/{mid}/tag_suggestions")
 def tag_suggestions(mid: str):
+    """Module-level suggestions come ONLY from tags that already exist elsewhere."""
     mod = get_module_row(mid)
     if not mod:
         raise HTTPException(404, "Module not found")
     existing = set(x.lower() for x in mod["tags"])
-    has_context = bool(mod.get("notes") or any((mod.get("fields") or {}).values()))
-    conn = db()
-    nrec = conn.execute("SELECT COUNT(*) c FROM records WHERE module_id=?", (mid,)).fetchone()["c"]
-    conn.close()
-    suggestions = []
-    if ai_available() and (has_context or nrec > 0):
+    candidates = [t for t in all_tags() if t.lower() not in existing]
+    if not candidates:
+        return {"suggestions": []}
+    if ai_available() and len(candidates) > 5:
         try:
-            payload = "\n".join(module_context_lines(mod))
-            ev = sibling_evidence(mid, "", limit=6)
-            if ev:
-                payload += "\nRecords:\n" + "\n".join(ev)
-            known = all_tags()
-            if known:
-                payload += "\nTags the owner already uses elsewhere (prefer reusing these when apt): " + ", ".join(known)
+            payload = ("\n".join(module_context_lines(mod))
+                       + "\n\nChoose ONLY from this list of the owner's existing tags: "
+                       + ", ".join(candidates))
             raw = call_claude(
-                "Suggest up to 10 short, lowercase, reusable organizational tags for this "
-                "archive module (like 'friend', 'coworker', 'bitcoin', 'legal'). Only suggest "
-                "what the context clearly supports — fewer good tags beat stretched ones. "
+                "Pick the existing tags most relevant to this module, best first. Choose "
+                "only from the provided list — never invent new tags. "
                 'Reply ONLY with JSON: {"tags": [str]}',
-                [{"type": "text", "text": payload}], max_tokens=300)
-            suggestions = [t.strip() for t in parse_json_block(raw).get("tags", []) if t.strip()]
+                [{"type": "text", "text": payload}], max_tokens=200)
+            picked = [t for t in parse_json_block(raw).get("tags", []) if t in candidates]
+            if picked:
+                candidates = picked + [c for c in candidates if c not in picked]
         except Exception:
-            suggestions = []
-    if not suggestions:
-        suggestions = list(DEFAULT_TAG_SUGGESTIONS)
-    suggestions = [t for t in suggestions if t.lower() not in existing]
-    return {"suggestions": suggestions[:10]}
+            pass
+    return {"suggestions": candidates[:10]}
+
+
+@app.get("/api/tag_wand")
+def tag_wand():
+    """Sidebar 🪄: AI invents up to 4 NEW tags from a light read of the archive."""
+    if not ai_available():
+        raise HTTPException(400, "AI is off — add an API key in Settings first.")
+    existing = all_tags()
+    conn = db()
+    mods = conn.execute("SELECT name,type,notes,tags_json FROM modules").fetchall()
+    recs = conn.execute(
+        "SELECT title, substr(description,1,100) d FROM records ORDER BY created_at DESC LIMIT 15").fetchall()
+    conn.close()
+    lines = ["Modules:"]
+    for m in mods:
+        lines.append(f"- {m['name']} ({m['type']}) tags={m['tags_json']} notes={m['notes'][:120]}")
+    if recs:
+        lines.append("Recent records:")
+        lines += [f"- {r['title']}: {r['d']}" for r in recs]
+    if existing:
+        lines.append("Existing tags (do NOT repeat these): " + ", ".join(existing))
+    raw = call_claude(
+        "Suggest exactly 4 NEW organizational tags for this personal archive — short, "
+        "lowercase, and showing range: relationships, places, themes, even playful ones "
+        "like 'will age like milk'. Never repeat existing tags. Ground each in what you "
+        'actually see in the data. Reply ONLY with JSON: {"tags": [str]}',
+        [{"type": "text", "text": "\n".join(lines)}], max_tokens=200)
+    sugs = [t.strip() for t in parse_json_block(raw).get("tags", [])
+            if t.strip() and t.strip().lower() not in {e.lower() for e in existing}]
+    return {"suggestions": sugs[:4]}
 
 
 @app.patch("/api/modules/{mid}")
