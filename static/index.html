@@ -199,6 +199,10 @@ h2{font-size:16px;margin:22px 0 10px}
 .wand-btn{cursor:pointer;font-size:13px;text-transform:none;letter-spacing:0}
 .wand-btn:hover{filter:brightness(1.4)}
 
+/* AI summary button */
+.ai-btn{background:linear-gradient(135deg,rgba(124,92,255,.22),rgba(91,141,239,.22));border:1px solid rgba(124,92,255,.55);color:#b9a8ff;border-radius:20px;padding:5px 13px;font-size:12.5px;font-weight:600;transition:all .2s}
+.ai-btn:hover{border-color:#b9a8ff;color:#d6ccff;box-shadow:0 0 14px rgba(124,92,255,.35)}
+
 /* themed confirm dialog */
 .danger-solid{background:var(--red)!important;color:#fff!important;border-color:var(--red)!important;font-weight:600}
 
@@ -288,7 +292,10 @@ h2{font-size:16px;margin:22px 0 10px}
     <div class="mod-head">
       <div class="mod-icon" id="m-icon"></div>
       <div style="flex:1">
-        <h1 id="m-name"></h1>
+        <div style="display:flex;align-items:center;gap:10px">
+          <h1 id="m-name"></h1>
+          <button class="ai-btn" onclick="showAiSummaryWip()" title="AI summary — coming soon">✨ AI summary</button>
+        </div>
         <div class="sub" id="m-sub"></div>
         <div class="fields" id="m-fields"></div>
         <div id="m-tags" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;align-items:center"></div>
@@ -1204,6 +1211,21 @@ async function saveNote(kind){
     closeModal(); refreshRecords(); loadModules();
     if(r.amended) toast(`Saved. ✎ AI updated ${r.amended} earlier record${r.amended>1?"s":""} with new context.`,6000);
   }catch(e){ btn.disabled=false; btn.textContent="Save"; toast("Save failed: "+esc(e.message)); }
+}
+
+function showAiSummaryWip(){
+  modal(`<div style="text-align:center;padding:18px 6px">
+    <div style="font-size:46px;margin-bottom:10px">✨</div>
+    <h3 style="margin-bottom:10px">AI summary — work in progress</h3>
+    <div class="sub" style="max-width:420px;margin:0 auto;line-height:1.6">
+      This will become a living summary card for ${esc(state.module?.name||"this module")} —
+      built and updated in real time as uploads are processed, weighing what actually
+      matters by how often it shows up, and designed like a modern page rather than a
+      wall of text: photos it recognizes, captions it infers, the things this module
+      is really about.
+    </div>
+    <div class="m-actions" style="justify-content:center"><button class="btn primary" onclick="closeModal()">Close</button></div>
+  </div>`);
 }
 
 /* ---------------- record detail ---------------- */
