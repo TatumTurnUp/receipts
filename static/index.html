@@ -103,6 +103,10 @@ h2{font-size:16px;margin:22px 0 10px}
 .tl-thumb img{width:100%;height:100%;object-fit:cover}
 .tl-time{color:var(--dim);font-size:12px;min-width:64px}
 .tl-mod{color:var(--accent2);font-size:12px}
+.tl-modtag{position:absolute;left:14px;bottom:6px;color:var(--accent2);font-size:11.5px}
+.tl-item.has-mod{padding-bottom:26px}
+.tab-divider{border-left:1px solid var(--line);margin:6px 8px;align-self:stretch}
+#home-sortbar select{width:auto;padding:6px 10px;font-size:13px}
 
 /* modal — anchored to top so it never jumps when content changes */
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:flex-start;justify-content:center;z-index:50;padding:7vh 20px 20px;overflow-y:auto}
@@ -272,10 +276,8 @@ h2{font-size:16px;margin:22px 0 10px}
     </div>
     <div class="ask-hint">AI reads your records to answer questions. Plain keywords work too.</div>
     <div id="home-results"></div>
-    <div class="tabs">
-      <button class="tab active" id="home-tab-recent" onclick="homeTab('recent')">Modules</button>
-      <button class="tab" id="home-tab-timeline" onclick="homeTab('timeline')">Global timeline</button>
-    </div>
+    <div class="tabs" id="home-tabs"></div>
+    <div id="home-sortbar" style="display:flex;align-items:center;gap:8px;margin-bottom:10px"></div>
     <div id="home-recent" class="grid"></div>
     <div id="home-timeline" class="hidden"></div>
   </div>
@@ -550,6 +552,15 @@ function moduleCardHtml(m){
       <span class="badge b-upload">${m.record_count||0} record${m.record_count!==1?"s":""} · ${last}</span>
     </div></div>`;
 }
+function loadHomeSort(){
+  try{ const s=JSON.parse(localStorage.getItem("receipts_home_sort")); if(s&&s.key) return s; }catch(e){}
+  return {key:"activity", dir:"desc"};
+}
+state.homeSort = loadHomeSort();
+state.homeTab = "all";
+state.homeTlDir = "desc";
+state.homeTl = [];
+
 async function showHome(){
   loadUsage();
   state.moduleId=null;
@@ -558,22 +569,69 @@ async function showHome(){
   $("view-audit").classList.add("hidden");
   $("maudit").classList.add("hidden");
   await loadModules();
-  const homeMods = state.tagFilter.size
-    ? state.modules.filter(m=>[...state.tagFilter].every(t=>(m.tags||[]).includes(t)))
+  state.homeTl = await api("/timeline");
+  renderHome();
+}
+function homeTab(t){ state.homeTab=t; renderHome(); }
+function homeSortChange(v){
+  const [key,dir]=v.split(":");
+  state.homeSort={key,dir};
+  try{ localStorage.setItem("receipts_home_sort", JSON.stringify(state.homeSort)); }catch(e){}
+  renderHome();
+}
+function homeTlDirChange(v){ state.homeTlDir=v; renderHome(); }
+function sortModules(list){
+  const {key,dir}=state.homeSort, mul=dir==="asc"?1:-1;
+  const cmp = key==="alpha" ? (a,b)=>a.name.toLowerCase().localeCompare(b.name.toLowerCase())
+    : key==="count" ? (a,b)=>(a.record_count||0)-(b.record_count||0)
+    : (a,b)=>String(a.last_activity||a.created_at||"").localeCompare(String(b.last_activity||b.created_at||""));
+  return [...list].sort((a,b)=>mul*cmp(a,b));
+}
+function renderHome(){
+  const t=state.homeTab, isTl=t==="timeline";
+  // tabs: Modules | Global timeline | divider | one per type
+  const typeTabs=["person","event","place","project","generic"].map(ty=>
+    `<button class="tab ${t===ty?'active':''}" onclick="homeTab('${ty}')">${ICONS[ty]} ${GROUPS[ty]}</button>`).join("");
+  $("home-tabs").innerHTML =
+    `<button class="tab ${t==='all'?'active':''}" onclick="homeTab('all')">Modules</button>
+     <button class="tab ${isTl?'active':''}" onclick="homeTab('timeline')">Global timeline</button>
+     <span class="tab-divider"></span>${typeTabs}`;
+  // sort bar (top left)
+  if(isTl){
+    $("home-sortbar").innerHTML = `<span class="sub">Sort:</span>
+      <select onchange="homeTlDirChange(this.value)">
+        <option value="desc" ${state.homeTlDir==="desc"?"selected":""}>Newest first</option>
+        <option value="asc" ${state.homeTlDir==="asc"?"selected":""}>Oldest first</option>
+      </select>`;
+  } else {
+    const cur=`${state.homeSort.key}:${state.homeSort.dir}`;
+    const opt=(v,l)=>`<option value="${v}" ${cur===v?"selected":""}>${l}</option>`;
+    $("home-sortbar").innerHTML = `<span class="sub">Sort:</span>
+      <select onchange="homeSortChange(this.value)">
+        ${opt("activity:desc","Last activity — newest first")}
+        ${opt("activity:asc","Last activity — oldest first")}
+        ${opt("alpha:asc","Alphabetical — A to Z")}
+        ${opt("alpha:desc","Alphabetical — Z to A")}
+        ${opt("count:desc","Records — most first")}
+        ${opt("count:asc","Records — fewest first")}
+      </select>`;
+  }
+  $("home-recent").classList.toggle("hidden", isTl);
+  $("home-timeline").classList.toggle("hidden", !isTl);
+  if(isTl){
+    $("home-timeline").innerHTML = timelineHtml(state.homeTl, true, "content", state.homeTlDir);
+    return;
+  }
+  let mods = state.tagFilter.size
+    ? state.modules.filter(m=>[...state.tagFilter].every(tg=>(m.tags||[]).includes(tg)))
     : state.modules;
-  $("home-recent").innerHTML = (homeMods.length? homeMods.map(moduleCardHtml).join("") : "") +
+  if(t!=="all") mods = mods.filter(m=>m.type===t);
+  mods = sortModules(mods);
+  $("home-recent").innerHTML = mods.map(moduleCardHtml).join("") +
     `<div class="card" onclick="openNewModule()" style="border-style:dashed">
        <div class="thumb" style="height:86px;color:var(--dim)">➕</div>
        <div class="cbody"><div class="ct" style="color:var(--dim)">New module</div>
        <div class="cd">A person, place, event, or project</div></div></div>`;
-  const tl = await api("/timeline");
-  $("home-timeline").innerHTML = timelineHtml(tl, true);
-}
-function homeTab(t){
-  $("home-tab-recent").classList.toggle("active", t==="recent");
-  $("home-tab-timeline").classList.toggle("active", t==="timeline");
-  $("home-recent").classList.toggle("hidden", t!=="recent");
-  $("home-timeline").classList.toggle("hidden", t!=="timeline");
 }
 
 /* ---------------- module view ---------------- */
@@ -705,10 +763,11 @@ function linkPreviewHtml(r){
     <div style="min-width:0"><div class="lp-t">${esc(m.title||r.body)}</div>
     <div class="lp-s">${esc(m.site||"")}${m.description?` — ${esc(m.description.slice(0,80))}`:""}</div></div></div>`;
 }
-function timelineHtml(items, showModule, sortBy="content"){
+function timelineHtml(items, showModule, sortBy="content", dir="asc"){
   if(!items.length) return `<div class="empty">Nothing on the timeline yet.</div>`;
   const key = r => sortBy==="upload"? (r.created_at||"") : (r.ts_effective||r.created_at||"");
-  const sorted = [...items].sort((a,b)=>key(a).localeCompare(key(b)));
+  const mul = dir==="desc"? -1 : 1;
+  const sorted = [...items].sort((a,b)=>mul*key(a).localeCompare(key(b)));
   const groups={};
   for(const r of sorted){
     const d = new Date(key(r));
@@ -727,16 +786,16 @@ function timelineHtml(items, showModule, sortBy="content"){
         : sortBy==="upload"? `content: ${fmtTs(r.ts_effective)}`
         : `uploaded: ${fmtTs(r.created_at)}`;
       const kcls = ["note","link","moment"].includes(r.kind)? " k-"+r.kind : "";
-      html+=`<div class="tl-item${kcls}" onclick="openDetail('${r.id}')">
+      html+=`<div class="tl-item${kcls}${showModule?" has-mod":""}" onclick="openDetail('${r.id}')">
         ${thumbHtml(r,"tl-thumb")}
         <div class="tl-time">${sortBy==="content"?scoreChip(r)+" ":""}${dateless&&sortBy==="content"?"":time}<div class="tl-sec">${sec}</div></div>
         <div style="flex:1;min-width:0">
           <div style="font-weight:600;font-size:13.5px">${esc(r.title||r.original_name||"Untitled")}</div>
           <div class="sub" style="overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical">${esc(r.description||r.body||"")}</div>
           ${linkPreviewHtml(r)}
-          ${showModule?`<div class="tl-mod">${esc(r.module_name||"")}</div>`:""}
         </div>
         <span class="badge b-${r.ts_source}">${SRC_LABEL[r.ts_source]||""}</span>
+        ${showModule?`<span class="tl-modtag">${ICONS[r.module_type]||"📁"} ${esc(r.module_name||"")}</span>`:""}
       </div>`;
     }
     html+="</div>";

@@ -1188,7 +1188,7 @@ def set_settings(s: SettingsIn):
 def list_modules():
     conn = db()
     rows = conn.execute(
-        """SELECT m.*, COUNT(r.id) AS record_count, MAX(r.ts_effective) AS last_activity
+        """SELECT m.*, COUNT(r.id) AS record_count, MAX(r.created_at) AS last_activity
            FROM modules m LEFT JOIN records r ON r.module_id = m.id
            GROUP BY m.id ORDER BY m.name COLLATE NOCASE"""
     ).fetchall()
