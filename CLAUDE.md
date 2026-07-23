@@ -73,6 +73,10 @@ holds their irreplaceable personal archive. Convenience never outranks preservat
 - **Cross-module timestamp corroboration:** ts_score inference currently uses
   sibling records within the same module as evidence. When module linking lands,
   extend the evidence pool across linked modules.
+- **Global Timeline workspace:** the sidebar "Global Timeline" entry is a
+  work-in-progress placeholder. The owner's vision: an explorable canvas —
+  pan time on X, modules on Y, zoom from years to minutes, records visually
+  linked across the archive. The simple list version stays in Home's tab.
 - **Module hopping / cross-links:** when a new module is created (e.g. a place),
   scan other modules' records for references; suggest them with approve/deny;
   approved records appear in both modules with a "Shared from [origin]"
