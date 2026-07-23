@@ -249,6 +249,7 @@ h2{font-size:16px;margin:22px 0 10px}
   <div id="logo"><span class="mark">🧾</span> Receipts</div>
   <div id="side-scroll">
     <button class="side-btn" onclick="showHome()">🏠&nbsp; Home / Search everything</button>
+    <button class="side-btn" onclick="showGtl()">🧭&nbsp; Global Timeline</button>
     <button class="side-btn" onclick="showAudit()">📜&nbsp; System Audit Log</button>
     <div id="mod-groups"></div>
   </div>
@@ -315,6 +316,21 @@ h2{font-size:16px;margin:22px 0 10px}
     </div>
     <div id="mod-records" class="grid"></div>
     <div id="mod-timeline" class="hidden"></div>
+  </div>
+
+  <!-- GLOBAL TIMELINE (future workspace) -->
+  <div id="view-gtl" class="hidden">
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;text-align:center">
+      <div style="font-size:52px;margin-bottom:14px">🧭</div>
+      <h1>Global Timeline</h1>
+      <div class="sub" style="max-width:440px;margin-top:8px;line-height:1.6">
+        Work in progress. This will become an explorable workspace — pan across time on
+        the X axis, drill through modules on the Y, zoom from years down to minutes,
+        and see records visually linked across your archive.
+      </div>
+      <div class="sub" style="margin-top:16px">For now, the simple version lives in
+        <a href="#" onclick="showHome();setTimeout(()=>homeTab('timeline'),50);return false">Home → Global timeline</a>.</div>
+    </div>
   </div>
 
   <!-- SYSTEM AUDIT LOG -->
@@ -567,10 +583,20 @@ async function showHome(){
   $("view-home").classList.remove("hidden");
   $("view-module").classList.add("hidden");
   $("view-audit").classList.add("hidden");
+  $("view-gtl").classList.add("hidden");
   $("maudit").classList.add("hidden");
   await loadModules();
   state.homeTl = await api("/timeline");
   renderHome();
+}
+function showGtl(){
+  state.moduleId=null;
+  $("view-home").classList.add("hidden");
+  $("view-module").classList.add("hidden");
+  $("view-audit").classList.add("hidden");
+  $("view-gtl").classList.remove("hidden");
+  $("maudit").classList.add("hidden");
+  loadModules();
 }
 function homeTab(t){ state.homeTab=t; renderHome(); }
 function homeSortChange(v){
@@ -594,6 +620,7 @@ function renderHome(){
     `<button class="tab ${t===ty?'active':''}" onclick="homeTab('${ty}')">${ICONS[ty]} ${GROUPS[ty]}</button>`).join("");
   $("home-tabs").innerHTML =
     `<button class="tab ${t==='all'?'active':''}" onclick="homeTab('all')">Modules</button>
+     <span class="tab-divider"></span>
      <button class="tab ${isTl?'active':''}" onclick="homeTab('timeline')">Global timeline</button>
      <span class="tab-divider"></span>${typeTabs}`;
   // sort bar (top left)
@@ -606,7 +633,9 @@ function renderHome(){
   } else {
     const cur=`${state.homeSort.key}:${state.homeSort.dir}`;
     const opt=(v,l)=>`<option value="${v}" ${cur===v?"selected":""}>${l}</option>`;
-    $("home-sortbar").innerHTML = `<span class="sub">Sort:</span>
+    $("home-sortbar").innerHTML = `
+      <button class="btn sm" style="border-style:dashed;color:var(--dim)" onclick="openNewModule()">＋ New module</button>
+      <span class="sub" style="margin-left:6px">Sort:</span>
       <select onchange="homeSortChange(this.value)">
         ${opt("activity:desc","Last activity — newest first")}
         ${opt("activity:asc","Last activity — oldest first")}
@@ -627,11 +656,8 @@ function renderHome(){
     : state.modules;
   if(t!=="all") mods = mods.filter(m=>m.type===t);
   mods = sortModules(mods);
-  $("home-recent").innerHTML = mods.map(moduleCardHtml).join("") +
-    `<div class="card" onclick="openNewModule()" style="border-style:dashed">
-       <div class="thumb" style="height:86px;color:var(--dim)">➕</div>
-       <div class="cbody"><div class="ct" style="color:var(--dim)">New module</div>
-       <div class="cd">A person, place, event, or project</div></div></div>`;
+  $("home-recent").innerHTML = mods.length? mods.map(moduleCardHtml).join("") :
+    `<div class="empty" style="grid-column:1/-1">Nothing here${state.tagFilter.size||t!=="all"?" that matches":" yet"}. Use ＋ New module above.</div>`;
 }
 
 /* ---------------- module view ---------------- */
@@ -643,6 +669,7 @@ async function showModule(id){
   if(seq!==navSeq) return;
   $("view-home").classList.add("hidden");
   $("view-audit").classList.add("hidden");
+  $("view-gtl").classList.add("hidden");
   $("view-module").classList.remove("hidden");
   $("maudit").classList.remove("hidden");
   $("maudit-panel").classList.add("hidden");
@@ -870,6 +897,7 @@ async function showAudit(){
   state.moduleId=null;
   $("view-home").classList.add("hidden");
   $("view-module").classList.add("hidden");
+  $("view-gtl").classList.add("hidden");
   $("view-audit").classList.remove("hidden");
   $("maudit").classList.add("hidden");
   loadModules();
@@ -909,10 +937,15 @@ function modal(html){
 }
 
 /* new / edit module */
-function openNewModule(){ moduleModal(null); }
+function openNewModule(){
+  // creating from a type tab pre-selects that type
+  const t = ["person","event","place","project","generic"].includes(state.homeTab) && !state.moduleId
+    ? state.homeTab : "person";
+  moduleModal(null, t);
+}
 function openEditModule(){ moduleModal(state.module); }
-function moduleModal(m){
-  const type = m? m.type : "person";
+function moduleModal(m, defaultType){
+  const type = m? m.type : (defaultType||"person");
   const presets = ["person","event","place","project","generic"].map(t=>
     `<div class="preset ${t===type?'sel':''}" data-t="${t}" onclick="pickPreset(this)">
        <div class="pi">${ICONS[t]}</div><div class="pn">${GROUPS[t].replace(/s$/,"")}</div></div>`).join("");
