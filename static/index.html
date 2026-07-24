@@ -184,6 +184,12 @@ h2{font-size:16px;margin:22px 0 10px}
 .tag-add:hover{border-color:var(--accent2);color:var(--text)}
 .side-tag{display:inline-block;background:var(--bg3);border:1px solid var(--line);border-radius:14px;padding:2px 9px;font-size:11.5px;color:var(--dim);cursor:pointer;margin:2px 2px 2px 0}
 .side-tag.on{border-color:var(--accent);color:var(--accent)}
+.side-tag .stx{display:none;margin-left:5px;font-weight:700}
+.side-tag:hover .stx{display:inline}
+.side-tag .stx:hover{color:var(--red)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg span{padding:1px 8px;cursor:pointer;font-size:10px;color:var(--dim)}
+.seg span.on{background:var(--bg3);color:var(--text)}
 
 /* themed autocomplete dropdown */
 .ac-wrap{position:relative;display:inline-block}
@@ -487,12 +493,27 @@ async function loadModules(){
   const [mods, tags] = await Promise.all([api("/modules"), api("/tags")]);
   state.modules = mods; state.allTags = tags;
   for(const t of [...state.tagFilter]) if(!tags.includes(t)) state.tagFilter.delete(t);
-  let html = `<div class="side-head"><span>Tags</span><span>
+  let html = `<div class="side-head"><span>Tags</span>
+      <span class="seg"><span class="${state.tagSort!=="123"?"on":""}" onclick="tagSortSet('abc')">ABC</span><span class="${state.tagSort==="123"?"on":""}" onclick="tagSortSet('123')">123</span></span>
+      <span>
       ${state.tagFilter.size?`<span style="cursor:pointer" onclick="clearTagFilter()">clear</span>&nbsp;`:""}
       <span class="wand-btn" title="AI: suggest new tags from your archive" onclick="wandSuggest()">🪄</span>
     </span></div><div style="padding:0 4px 4px">`;
-  if(tags.length){
-    html += tags.map(t=>`<span class="side-tag ${state.tagFilter.has(t)?'on':''}" onclick="toggleTagFilter('${esc(t)}')">${esc(t)}</span>`).join("");
+  // every registry tag lives here (even with zero modules); counts prune to the AND filter
+  const inUse={};
+  for(const m of state.modules) for(const tg of (m.tags||[])) inUse[tg]=(inUse[tg]||0)+1;
+  const sel=[...state.tagFilter];
+  const countWith = t => state.modules.filter(m=>{
+    const s=new Set(m.tags||[]);
+    return sel.every(x=>s.has(x)) && s.has(t);
+  }).length;
+  let sideTags = tags.map(t=>({t, n: sel.length? countWith(t) : (inUse[t]||0)}));
+  sideTags.sort((a,b)=> state.tagSort==="123"
+    ? (b.n-a.n) || a.t.toLowerCase().localeCompare(b.t.toLowerCase())
+    : a.t.toLowerCase().localeCompare(b.t.toLowerCase()));
+  if(sideTags.length){
+    html += sideTags.map(({t,n})=>
+      `<span class="side-tag ${state.tagFilter.has(t)?'on':''}" ${sel.length&&!n&&!state.tagFilter.has(t)?'style="opacity:.4"':''} onclick="toggleTagFilter('${esc(t)}')">${esc(t)}${n?` <span style="opacity:.6">${n}</span>`:""}<span class="stx" title="Delete this tag everywhere" onclick="event.stopPropagation();deleteTagGlobal('${esc(t)}')">✕</span></span>`).join("");
   } else {
     html += STARTER_TAGS.map(t=>`<span class="tag-sug" title="Example — click to create this tag" onclick="starterAdd('${esc(t)}')">＋ ${esc(t)}</span>`).join(" ");
   }
@@ -526,6 +547,22 @@ function toggleTagFilter(t){
   if(!state.moduleId && !$("view-home").classList.contains("hidden")) showHome();
 }
 function clearTagFilter(){ state.tagFilter.clear(); loadModules(); }
+function tagSortSet(v){
+  state.tagSort=v;
+  try{ localStorage.setItem("receipts_tag_sort", v); }catch(e){}
+  loadModules();
+}
+async function deleteTagGlobal(t){
+  const n = state.modules.filter(m=>(m.tags||[]).includes(t)).length;
+  const msg = n? `Delete the tag <b>"${esc(t)}"</b> everywhere? It will be removed from ${n} module${n>1?"s":""}.`
+              : `Delete the tag <b>"${esc(t)}"</b>? No modules use it.`;
+  if(!await uiConfirm(msg, "Delete tag")) return;
+  await api("/tags/"+encodeURIComponent(t), {method:"DELETE"});
+  state.tagFilter.delete(t);
+  toast(`Tag "${esc(t)}" deleted.`);
+  loadModules();
+  if(state.moduleId) showModule(state.moduleId);
+}
 async function starterAdd(t){
   await jpost("/tags",{name:t});
   toast(`Tag "${esc(t)}" created — attach it to modules whenever.`);
@@ -580,6 +617,7 @@ function loadHomeSort(){
   return {key:"activity", dir:"desc"};
 }
 state.homeSort = loadHomeSort();
+try{ state.tagSort = localStorage.getItem("receipts_tag_sort") || "abc"; }catch(e){ state.tagSort="abc"; }
 state.homeTab = "all";
 state.homeTlDir = "desc";
 state.homeTl = [];
@@ -697,7 +735,8 @@ async function showModule(id){
 /* ----- module tags ----- */
 function renderModuleTags(){
   const m=state.module; if(!m) return;
-  const sugs=(state.tagSugs||[]).filter(t=>!(m.tags||[]).includes(t)).slice(0,5);
+  // suggestions only appear while the module is untagged
+  const sugs=(m.tags||[]).length? [] : (state.tagSugs||[]).slice(0,5);
   $("m-tags").innerHTML =
     (m.tags||[]).map(t=>`<span class="tagchip">${esc(t)}<span class="x" title="Remove tag" onclick="removeModuleTag('${esc(t)}')">✕</span></span>`).join("") +
     sugs.map(t=>`<span class="tag-sug" title="Suggested — click to add" onclick="addModuleTags(['${esc(t)}'])">＋ ${esc(t)}</span>`).join("") +
@@ -869,6 +908,7 @@ function auditSentence(e){
   const label = esc(e.cur_title || e.entity_label || e.cur_file || "a record");
   const L = `“${label}”`;
   if(e.entity_type==="tag"){
+    if(e.field==="deleted") return `${who} deleted the tag “${esc(e.entity_label||e.old_value)}”`;
     return `${who} created the tag “${esc(e.entity_label||e.new_value)}”`;
   }
   if(e.entity_type==="module"){

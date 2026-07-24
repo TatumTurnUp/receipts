@@ -1326,6 +1326,28 @@ def create_tag(t: TagCreateIn):
     return {"ok": True, "name": name}
 
 
+@app.delete("/api/tags/{name}")
+def delete_tag(name: str):
+    conn = db()
+    affected = []
+    for m in conn.execute("SELECT id,name,tags_json FROM modules").fetchall():
+        tags = json.loads(m["tags_json"] or "[]")
+        if name in tags:
+            newt = [t for t in tags if t != name]
+            conn.execute("UPDATE modules SET tags_json=? WHERE id=?", (json.dumps(newt), m["id"]))
+            affected.append((m["id"], m["name"], tags, newt))
+    conn.execute("DELETE FROM tags WHERE name=?", (name,))
+    conn.commit()
+    conn.close()
+    for mid, mname, old, new in affected:
+        log_change("module", mid, "tags", json.dumps(old), json.dumps(new),
+                   note=f'Removed tags: {name} (tag deleted globally)',
+                   module_id=mid, label=mname)
+    log_change("tag", name, "deleted", name, "",
+               note=f"Tag deleted — removed from {len(affected)} module(s)", label=name)
+    return {"ok": True, "removed_from": len(affected)}
+
+
 @app.get("/api/modules/{mid}/tag_suggestions")
 def tag_suggestions(mid: str):
     """Module-level suggestions come ONLY from tags that already exist elsewhere."""
