@@ -16,6 +16,8 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:15
 button{font-family:var(--font);cursor:pointer;border:none;background:none;color:inherit;font-size:14px}
 input,textarea,select{font-family:var(--font);font-size:14px;background:var(--bg3);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:9px 12px;outline:none;width:100%}
 input:focus,textarea:focus,select:focus{border-color:var(--accent2)}
+.ic{width:1em;height:1em;vertical-align:-0.14em;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;display:inline-block}
+.ic.big{width:44px;height:44px;stroke-width:1.5}
 textarea{resize:vertical;min-height:70px}
 ::placeholder{color:var(--dim)}
 a{color:var(--accent2)}
@@ -256,15 +258,15 @@ h2{font-size:16px;margin:22px 0 10px}
 <body>
 
 <div id="sidebar">
-  <div id="logo"><span class="mark">🧾</span> Receipts</div>
+  <div id="logo"><span class="mark" data-ico="receipt"></span> Receipts</div>
   <div id="side-scroll">
-    <button class="side-btn" onclick="showHome()">🏠&nbsp; Home / Search everything</button>
-    <button class="side-btn" onclick="showGtl()">🧭&nbsp; Global Timeline</button>
-    <button class="side-btn" onclick="showAudit()">📜&nbsp; System Audit Log</button>
+    <button class="side-btn" onclick="showHome()"><span data-ico="home"></span>&nbsp; Home / Search everything</button>
+    <button class="side-btn" onclick="showGtl()"><span data-ico="compass"></span>&nbsp; Global Timeline</button>
+    <button class="side-btn" onclick="showAudit()"><span data-ico="book"></span>&nbsp; System Audit Log</button>
     <div id="mod-groups"></div>
   </div>
   <div id="side-bottom">
-    <button class="side-btn" onclick="openNewModule()">➕&nbsp; New module</button>
+    <button class="side-btn" onclick="openNewModule()"><span data-ico="plus"></span>&nbsp; New module</button>
     <button class="side-btn" onclick="openSettings()"><span id="ai-dot"></span>Settings & AI</button>
   </div>
 </div>
@@ -300,7 +302,7 @@ h2{font-size:16px;margin:22px 0 10px}
       <div style="flex:1">
         <div style="display:flex;align-items:center;gap:10px">
           <h1 id="m-name"></h1>
-          <button class="ai-btn" onclick="showAiSummaryWip()" title="AI summary — coming soon">✨ AI summary</button>
+          <button class="ai-btn" onclick="showAiSummaryWip()" title="AI summary — coming soon"><span data-ico="sparkles"></span> AI summary</button>
         </div>
         <div class="sub" id="m-sub"></div>
         <div class="fields" id="m-fields"></div>
@@ -322,10 +324,10 @@ h2{font-size:16px;margin:22px 0 10px}
       <button class="tab" id="tab-timeline" onclick="modTab('timeline')">Timeline</button>
     </div>
     <div style="display:flex;gap:8px;margin-bottom:12px">
-      <button class="btn primary" onclick="openUpload()">⬆ Upload files</button>
-      <button class="btn" onclick="openNote('note')">✏️ Add note</button>
-      <button class="btn" onclick="openNote('link')">🔗 Add link</button>
-      <button class="btn" onclick="openNote('moment')">⭐ Add moment</button>
+      <button class="btn primary" onclick="openUpload()"><span data-ico="upload"></span> Upload files</button>
+      <button class="btn" onclick="openNote('note')"><span data-ico="note"></span> Add note</button>
+      <button class="btn" onclick="openNote('link')"><span data-ico="link"></span> Add link</button>
+      <button class="btn" onclick="openNote('moment')"><span data-ico="star"></span> Add moment</button>
     </div>
     <div id="mod-records" class="grid"></div>
     <div id="mod-timeline" class="hidden"></div>
@@ -334,7 +336,7 @@ h2{font-size:16px;margin:22px 0 10px}
   <!-- GLOBAL TIMELINE (future workspace) -->
   <div id="view-gtl" class="hidden">
     <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;text-align:center">
-      <div style="font-size:52px;margin-bottom:14px">🧭</div>
+      <div style="margin-bottom:14px;color:var(--accent)" data-ico="compass" data-big="1"></div>
       <h1>Global Timeline</h1>
       <div class="sub" style="max-width:440px;margin-top:8px;line-height:1.6">
         Work in progress. This will become an explorable workspace — pan across time on
@@ -348,7 +350,7 @@ h2{font-size:16px;margin:22px 0 10px}
 
   <!-- SYSTEM AUDIT LOG -->
   <div id="view-audit" class="hidden">
-    <h1>📜 System Audit Log</h1>
+    <h1><span data-ico="book"></span> System Audit Log</h1>
     <div class="sub">Every change across every module — uploads, edits, AI updates, deletions. Append-only; nothing is ever erased from this trail.</div>
     <div id="audit-list" style="margin-top:16px"></div>
   </div>
@@ -365,9 +367,9 @@ h2{font-size:16px;margin:22px 0 10px}
 
 <!-- MODULE AUDIT LOG floating widget -->
 <div id="maudit" class="hidden">
-  <button id="maudit-fab" onclick="toggleModuleAudit()">📜 Audit Log</button>
+  <button id="maudit-fab" onclick="toggleModuleAudit()"><span data-ico="book"></span> Audit Log</button>
   <div id="maudit-panel" class="hidden">
-    <div id="maudit-head">📜 Module Audit Log <button onclick="toggleModuleAudit()" style="float:right">✕</button></div>
+    <div id="maudit-head"><span data-ico="book"></span> Module Audit Log <button onclick="toggleModuleAudit()" style="float:right">✕</button></div>
     <div id="maudit-body"></div>
   </div>
 </div>
@@ -377,9 +379,46 @@ h2{font-size:16px;margin:22px 0 10px}
 <div id="toast-root"></div>
 
 <script>
-const ICONS = {person:"👤", event:"📅", place:"📍", project:"🛠️", generic:"📁"};
+/* ---- inline SVG icon set (stroke = currentColor, themes automatically) ---- */
+const IC = {
+  user:'<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  calendar:'<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
+  pin:'<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>',
+  tool:'<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+  folder:'<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
+  image:'<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>',
+  video:'<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/>',
+  music:'<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+  link:'<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  note:'<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>',
+  star:'<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
+  file:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>',
+  home:'<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
+  compass:'<circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/>',
+  book:'<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>',
+  upload:'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>',
+  pencil:'<path d="M17 3a2.83 2.83 0 0 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>',
+  trash:'<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+  refresh:'<polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>',
+  sparkles:'<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/>',
+  wand:'<path d="M15 4V2"/><path d="M15 16v-2"/><path d="M8 9h2"/><path d="M20 9h2"/><path d="M17.8 11.8L19 13"/><path d="M17.8 6.2L19 5"/><path d="M12.2 6.2L11 5"/><path d="M3 21l9-9"/>',
+  receipt:'<path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="16" y2="11"/><line x1="8" y1="15" x2="12" y2="15"/>',
+  pushpin:'<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z"/>',
+  search:'<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
+  db:'<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>',
+  clock:'<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  bot:'<rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="15" x2="8" y2="17"/><line x1="16" y1="15" x2="16" y2="17"/>',
+  thumbup:'<path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3z"/><path d="M7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/>',
+  thumbdown:'<path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3z"/><path d="M17 2h3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-3"/>',
+  meh:'<circle cx="12" cy="12" r="10"/><line x1="8" y1="15" x2="16" y2="15"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/>',
+  plus:'<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+  alert:'<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+};
+const ico = (n, cls="") => `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${IC[n]||IC.file}</svg>`;
+
+const ICONS = {person:ico("user"), event:ico("calendar"), place:ico("pin"), project:ico("tool"), generic:ico("folder")};
 const GROUPS = {person:"People", event:"Events", place:"Places", project:"Projects", generic:"Other"};
-const KIND_ICON = {image:"🖼️", video:"🎬", audio:"🎧", link:"🔗", note:"📝", moment:"⭐", file:"📄"};
+const KIND_ICON = {image:ico("image"), video:ico("video"), audio:ico("music"), link:ico("link"), note:ico("note"), moment:ico("star"), file:ico("file")};
 const PRESET_FIELDS = {
   person:  ["Relationship","How we met"],
   event:   ["When","Where"],
@@ -401,7 +440,7 @@ const NOTES_PLACEHOLDER = {
   project: "Describe the project and what counts as progress.\ne.g. \"Everything related to the kitchen remodel — quotes, contractor texts, receipts\"",
   generic: "Describe what belongs in this module so the AI can file and search it well.\ne.g. \"Anything related to my car — repairs, insurance, the accident in March\""
 };
-const SRC_LABEL = {manual:"📌 manual", content:"🔍 from content", metadata:"🗂 from metadata", upload:"⬆ upload time", none:"no date"};
+const SRC_LABEL = {manual:ico("pushpin")+" manual", content:ico("search")+" from content", metadata:ico("db")+" from metadata", upload:ico("clock")+" upload time", none:"no date"};
 const MODELS = [
   ["claude-opus-4-8","Opus — most careful, most expensive"],
   ["claude-sonnet-5","Sonnet — fast + smart (default)"],
@@ -497,7 +536,7 @@ async function loadModules(){
       <span class="seg"><span class="${state.tagSort!=="123"?"on":""}" onclick="tagSortSet('abc')">ABC</span><span class="${state.tagSort==="123"?"on":""}" onclick="tagSortSet('123')">123</span></span>
       <span>
       ${state.tagFilter.size?`<span style="cursor:pointer" onclick="clearTagFilter()">clear</span>&nbsp;`:""}
-      <span class="wand-btn" title="AI: suggest new tags from your archive" onclick="wandSuggest()">🪄</span>
+      <span class="wand-btn" title="AI: suggest new tags from your archive" onclick="wandSuggest()">${ico("wand")}</span>
     </span></div><div style="padding:0 4px 4px">`;
   // every registry tag lives here (even with zero modules); counts prune to the AND filter
   const inUse={};
@@ -575,7 +614,7 @@ async function wandSuggest(){
     const r=await api("/tag_wand");
     state.wandSugs=r.suggestions||[];
     if(!state.wandSugs.length) toast("The AI couldn't find anything new to suggest.");
-  }catch(e){ toast("🪄 "+esc(e.message)); }
+  }catch(e){ toast(ico("wand")+" "+esc(e.message)); }
   state.wandLoading=false; loadModules();
 }
 async function wandAdd(t){
@@ -605,7 +644,7 @@ async function loadUsage(){
 function moduleCardHtml(m){
   const last = m.last_activity? `last activity ${fmtTs(m.last_activity)}` : "empty";
   return `<div class="card" onclick="showModule('${m.id}')">
-    <div class="thumb" style="height:86px">${ICONS[m.type]||"📁"}</div>
+    <div class="thumb" style="height:86px">${ICONS[m.type]||ICONS.generic}</div>
     <div class="cbody">
       <div class="ct">${esc(m.name)}</div>
       <div class="cd">${esc(m.notes||GROUPS[m.type]||"")}</div>
@@ -720,7 +759,7 @@ async function showModule(id){
   $("maudit-panel").classList.add("hidden");
   $("mod-results").innerHTML=""; $("mod-q").value="";
   const m=state.module;
-  $("m-icon").textContent = ICONS[m.type]||"📁";
+  $("m-icon").innerHTML = ICONS[m.type]||ICONS.generic;
   $("m-name").textContent = m.name;
   $("m-sub").textContent = (GROUPS[m.type]||"Module").replace(/s$/,"") + (m.notes? " — "+m.notes : "");
   $("m-fields").innerHTML = Object.entries(m.fields||{}).filter(([k,v])=>v)
@@ -805,13 +844,13 @@ function modTab(t){
 /* ---------------- cards & timeline ---------------- */
 function thumbHtml(r, cls){
   if(r.kind==="image") return `<div class="${cls}"><img src="/api/files/${r.id}" loading="lazy"></div>`;
-  return `<div class="${cls}">${KIND_ICON[r.kind]||"📄"}</div>`;
+  return `<div class="${cls}">${KIND_ICON[r.kind]||KIND_ICON.file}</div>`;
 }
 function cardHtml(r){
   const badge = r.ts_source==="none"
     ? `<span class="badge b-upload">uploaded ${fmtTs(r.created_at)}</span>`
     : `${scoreChip(r)} <span class="badge b-${r.ts_source}">${SRC_LABEL[r.ts_source]||r.ts_source} · ${fmtTs(r.ts_effective)}</span>`;
-  const amendBadge = (r.amendments_target?.length)? ` <span class="badge b-amend">✎ updated</span>` : "";
+  const amendBadge = (r.amendments_target?.length)? ` <span class="badge b-amend">${ico("pencil")} updated</span>` : "";
   const kcls = ["note","link","moment"].includes(r.kind)? " k-"+r.kind : "";
   return `<div class="card${kcls}" onclick="openDetail('${r.id}')">
     ${thumbHtml(r,"thumb")}
@@ -868,7 +907,7 @@ function timelineHtml(items, showModule, sortBy="content", dir="asc"){
           ${linkPreviewHtml(r)}
         </div>
         <span class="badge b-${r.ts_source}">${SRC_LABEL[r.ts_source]||""}</span>
-        ${showModule?`<span class="tl-modtag">${ICONS[r.module_type]||"📁"} ${esc(r.module_name||"")}</span>`:""}
+        ${showModule?`<span class="tl-modtag">${ICONS[r.module_type]||ICONS.generic} ${esc(r.module_name||"")}</span>`:""}
       </div>`;
     }
     html+="</div>";
@@ -1132,7 +1171,7 @@ function renderUq(){
         active=finished<total;
   $("uq-head").innerHTML = active
     ? `<span class="spin"></span>Uploading ${Math.min(finished+1,total)} of ${total}…`
-    : err? `⚠️ ${done} uploaded, ${err} failed`
+    : err? `<span style="color:var(--red)">${ico("alert")}</span> ${done} uploaded, ${err} failed`
     : `✓ ${done} upload${done>1?"s":""} complete`;
   $("uq-prog-fill").style.width = (finished/total*100)+"%";
   const list=$("uq-list");
@@ -1142,9 +1181,9 @@ function renderUq(){
       let st="", btns="";
       if(i.status==="queued"){ st=`<span class="sub">waiting</span>`; btns=`<button class="icon-btn" onclick="uqRemove(${i.key})">✕</button>`; }
       if(i.status==="uploading"){ st=`<span class="spin"></span>`; btns=`<button class="icon-btn" title="Cancel" onclick="uqCancel(${i.key})">✕</button>`; }
-      if(i.status==="done"){ st=`<span style="color:var(--green)">✓${i.amended?" ✎"+i.amended:""}${i.aiError?" ⚠":""}</span>`; }
+      if(i.status==="done"){ st=`<span style="color:var(--green)">✓${i.amended?" "+ico("pencil")+i.amended:""}</span>${i.aiError?`<span style="color:var(--amber)">${ico("alert")}</span>`:""}`; }
       if(i.status==="error"){ st=`<span style="color:var(--red)">failed</span>`;
-        btns=`<button class="icon-btn" title="Retry" onclick="uqRetry(${i.key})">🔁</button><button class="icon-btn" onclick="uqRemove(${i.key})">✕</button>`; }
+        btns=`<button class="icon-btn" title="Retry" onclick="uqRetry(${i.key})">${ico("refresh")}</button><button class="icon-btn" onclick="uqRemove(${i.key})">✕</button>`; }
       return `<div class="uq-row">
         <div class="uq-name">${esc(i.name)}${i.status==="error"?`<div class="uq-err">${esc(i.error||"")}</div>`:""}${i.aiError?`<div class="uq-err">saved, AI analysis failed — open & Re-analyze</div>`:""}</div>
         <span class="uq-mod">→ ${esc(i.moduleName)}</span>${st}${btns}</div>`;
@@ -1187,7 +1226,7 @@ function renderUZone(){
       <span style="font-size:12px">screenshots, photos, videos, audio, PDFs — anything</span></div>`;
   } else {
     html = uFiles.map(f=>{
-      const thumb = f.url? `<img src="${f.url}">` : (KIND_ICON[f.file.type.split("/")[0]]||"📄");
+      const thumb = f.url? `<img src="${f.url}">` : (KIND_ICON[f.file.type.split("/")[0]]||KIND_ICON.file);
       return `<div class="file-row"><div class="file-thumb">${thumb}</div>
         <div class="file-name">${esc(f.file.name)}</div>
         <button class="icon-btn" title="Remove" onclick="uRemove(${f.key})">✕</button></div>`;
@@ -1197,7 +1236,7 @@ function renderUZone(){
   zone.innerHTML=html;
   const d=$("u-drop"); if(d) bindDrop(d);
   const go=$("u-go");
-  if(go){ go.textContent = uFiles.length? `⬆ Upload ${uFiles.length} file${uFiles.length>1?"s":""}` : "Upload"; go.disabled=!uFiles.length; }
+  if(go){ go.innerHTML = uFiles.length? `${ico("upload")} Upload ${uFiles.length} file${uFiles.length>1?"s":""}` : "Upload"; go.disabled=!uFiles.length; }
 }
 function uAdd(files){
   for(const f of files){
@@ -1220,9 +1259,9 @@ function doUpload(){
 
 /* ---------------- note / link / moment ---------------- */
 const NOTE_LABELS = {
-  note:  {title:"✏️ Add note",   body:"Text", ph:"Paste the text, quote, or memory here"},
-  link:  {title:"🔗 Add link",   body:"URL",  ph:"https://…"},
-  moment:{title:"⭐ Add moment", body:"What happened", ph:"A major event worth remembering — a move, a breakup, a launch, a first…"}
+  note:  {title:ico("note")+" Add note",   body:"Text", ph:"Paste the text, quote, or memory here"},
+  link:  {title:ico("link")+" Add link",   body:"URL",  ph:"https://…"},
+  moment:{title:ico("star")+" Add moment", body:"What happened", ph:"A major event worth remembering — a move, a breakup, a launch, a first…"}
 };
 function openNote(kind){
   const L = NOTE_LABELS[kind]||NOTE_LABELS.note;
@@ -1249,13 +1288,13 @@ async function saveNote(kind){
       body, user_context:$("n-ctx").value, include_date:dated,
       manual_timestamp: dated? readDateInput("n"):null});
     closeModal(); refreshRecords(); loadModules();
-    if(r.amended) toast(`Saved. ✎ AI updated ${r.amended} earlier record${r.amended>1?"s":""} with new context.`,6000);
+    if(r.amended) toast(`Saved. ${ico("pencil")} AI updated ${r.amended} earlier record${r.amended>1?"s":""} with new context.`,6000);
   }catch(e){ btn.disabled=false; btn.textContent="Save"; toast("Save failed: "+esc(e.message)); }
 }
 
 function showAiSummaryWip(){
   modal(`<div style="text-align:center;padding:18px 6px">
-    <div style="font-size:46px;margin-bottom:10px">✨</div>
+    <div style="margin-bottom:10px;color:#b9a8ff">${ico("sparkles","big")}</div>
     <h3 style="margin-bottom:10px">AI summary — work in progress</h3>
     <div class="sub" style="max-width:420px;margin:0 auto;line-height:1.6">
       This will become a living summary card for ${esc(state.module?.name||"this module")} —
@@ -1283,12 +1322,12 @@ function descWithAmends(r){
   return html;
 }
 function fbBtns(a){
-  if(a.verdict==="up") return `<span class="sub">👍 you confirmed this change</span>`;
-  if(a.verdict==="neutral") return `<span class="sub">😐 reverted (not held against the AI)</span>`;
-  if(a.verdict==="down") return `<span class="sub">👎 reverted — the AI was told it was wrong</span>`;
-  return `<button onclick="amendFb('${a.id}','up','${a.target_record_id}')" title="Correct — keep this change">👍</button>
-    <button onclick="amendFb('${a.id}','neutral','${a.target_record_id}')" title="Close but not right — undo, don't hold it against the AI">😐</button>
-    <button onclick="amendFb('${a.id}','down','${a.target_record_id}')" title="Wrong — undo and remember this mistake">👎</button>`;
+  if(a.verdict==="up") return `<span class="sub">${ico("thumbup")} you confirmed this change</span>`;
+  if(a.verdict==="neutral") return `<span class="sub">${ico("meh")} reverted (not held against the AI)</span>`;
+  if(a.verdict==="down") return `<span class="sub">${ico("thumbdown")} reverted — the AI was told it was wrong</span>`;
+  return `<button onclick="amendFb('${a.id}','up','${a.target_record_id}')" title="Correct — keep this change">${ico("thumbup")}</button>
+    <button onclick="amendFb('${a.id}','neutral','${a.target_record_id}')" title="Close but not right — undo, don't hold it against the AI">${ico("meh")}</button>
+    <button onclick="amendFb('${a.id}','down','${a.target_record_id}')" title="Wrong — undo and remember this mistake">${ico("thumbdown")}</button>`;
 }
 async function amendFb(aid, verdict, backTo){
   try{
@@ -1305,7 +1344,7 @@ async function openDetail(id){
   const img = r.kind==="image"? `<img class="detail-img" src="/api/files/${r.id}">` :
     (r.file_name? `<div class="kv"><b>File:</b> <a href="/api/files/${r.id}" target="_blank">${esc(r.original_name||"open")}</a></div>` : "");
   const srcFlags = (r.amendments_source||[]).map(a=>`
-    <div class="flag">✎ This item was used to update
+    <div class="flag">${ico("pencil")} This item was used to update
       <a href="#" onclick="closeModal();openDetail('${a.target_record_id}');return false">${esc(a.target_title||a.target_file||"another record")}</a>
       — ${esc(a.reason)} ${a.status==="reversed"?'<span class="sub">(reversed)</span>':`<span class="fb">${fbBtns(a)}</span>`}
     </div>`).join("");
@@ -1338,9 +1377,9 @@ async function openDetail(id){
   // plus the item itself (image/file link) is what the owner reads
   const extractedBlock = "";
   const aiErrBox = (r.ai && r.ai.error)
-    ? `<div class="flag" style="border-color:rgba(229,83,75,.5);background:rgba(229,83,75,.08)">⚠️ AI analysis failed: ${esc(r.ai.error.slice(0,200))} — hit <b>Re-analyze</b> below.</div>` : "";
+    ? `<div class="flag" style="border-color:rgba(229,83,75,.5);background:rgba(229,83,75,.08)"><span style="color:var(--red)">${ico("alert")}</span> AI analysis failed: ${esc(r.ai.error.slice(0,200))} — hit <b>Re-analyze</b> below.</div>` : "";
   modal(`<h3 id="d-h3"><span id="d-title-text">${esc(r.title||r.original_name||"Record")}</span>
-      <button class="icon-btn t-edit" title="Edit title" onclick="editTitle('${r.id}')">✏️</button></h3>
+      <button class="icon-btn t-edit" title="Edit title" onclick="editTitle('${r.id}')">${ico("pencil")}</button></h3>
     ${r.user_context? `<div class="ctx-box"><b>Your context:</b> ${esc(r.user_context)}</div>`:""}
     ${contentBlock}
     ${aiErrBox}
@@ -1351,22 +1390,22 @@ async function openDetail(id){
     ${dateRow}
     ${dateEditor}
     <div class="m-actions">
-      <button class="btn danger" onclick="deleteRecord('${r.id}')">Delete</button>
-      <button class="btn" onclick="openHistory('${r.id}')">📜 Audit Log</button>
-      <button class="btn" id="d-rean" onclick="reanalyze('${r.id}')">🔁 Re-analyze with AI</button>
+      <button class="btn danger" onclick="deleteRecord('${r.id}')">${ico("trash")} Delete</button>
+      <button class="btn" onclick="openHistory('${r.id}')">${ico("book")} Audit Log</button>
+      <button class="btn" id="d-rean" onclick="reanalyze('${r.id}')">${ico("refresh")} Re-analyze with AI</button>
       <button class="btn primary" onclick="closeModal()">Close</button>
     </div>`);
 }
 async function openHistory(id){
   const hist = await api(`/records/${id}/history`);
-  const ACTOR = {you:"🧍 You", ai:"🤖 AI", system:"⚙️ System"};
+  const ACTOR = {you:ico("user")+" You", ai:ico("bot")+" AI", system:ico("tool")+" System"};
   const rows = hist.length? hist.map(h=>`
     <div class="flag" style="border-color:var(--line);background:var(--bg3)">
       <div class="sub">${fmtTs(h.created_at)} · ${ACTOR[h.actor]||h.actor} · <b style="color:var(--text)">${esc(h.field)}</b>${h.note?` — ${esc(h.note)}`:""}</div>
       ${h.old_value?`<div class="kv" style="text-decoration:line-through;opacity:.65">${esc(h.old_value.slice(0,300))}</div>`:""}
       ${h.new_value?`<div class="kv" style="color:var(--text)">${esc(h.new_value.slice(0,300))}</div>`:""}
     </div>`).join("") : `<div class="empty">No changes recorded yet.</div>`;
-  modal(`<h3>📜 File Audit Log</h3>
+  modal(`<h3>${ico("book")} File Audit Log</h3>
     <div class="sub" style="margin-bottom:10px">Every change to this record, by you or the AI. Nothing is ever silently overwritten.</div>
     ${rows}
     <div class="m-actions"><button class="btn primary" onclick="closeModal();openDetail('${id}')">← Back to record</button></div>`);
@@ -1419,7 +1458,7 @@ async function openSettings(){
   let opts = MODELS.map(([v,l])=>`<option value="${v}" ${v===current?"selected":""}>${l}</option>`).join("");
   if(!MODELS.some(([v])=>v===current)) opts += `<option value="${esc(current)}" selected>${esc(current)} (custom)</option>`;
   modal(`<h3>Settings</h3>
-    <div class="kv">AI status: <b>${s.has_key? "🟢 connected ("+esc(s.key_preview)+")" : "🔴 no API key"}</b></div>
+    <div class="kv">AI status: <b>${s.has_key? '<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--green);margin-right:4px"></span>connected ('+esc(s.key_preview)+")" : '<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--red);margin-right:4px"></span>no API key'}</b></div>
     <div class="sub" style="margin:8px 0">AI powers upload analysis (reading screenshots, figuring out dates) and question-answering search. Your files always stay on this computer — only items being analyzed are sent to the AI. Get a key at <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a>.</div>
     <label>Anthropic API key</label>
     <input id="s-key" type="password" placeholder="${s.has_key? "•••••••• (leave blank to keep current)":"sk-ant-…"}">
@@ -1437,7 +1476,7 @@ async function restartApp(){
   if(!await uiConfirm("Restart the app? Takes a few seconds — your data is untouched. Use this after an update to load new code.", "Restart")) return;
   try{ await jpost("/restart",{}); }
   catch(e){
-    toast("⚠️ The running server is on old code and doesn't understand the restart command. One-time fix in a terminal: <b>fuser -k 8765/tcp</b> — then relaunch from your icon.", 12000);
+    toast(ico("alert")+" The running server is on old code and doesn't understand the restart command. One-time fix in a terminal: <b>fuser -k 8765/tcp</b> — then relaunch from your icon.", 12000);
     return;
   }
   document.body.style.opacity=.4;
@@ -1459,6 +1498,9 @@ async function saveSettings(){
 
 /* init */
 (async function(){
+  document.querySelectorAll("[data-ico]").forEach(el=>{
+    el.innerHTML = ico(el.dataset.ico, el.dataset.big? "big":"") + el.innerHTML;
+  });
   try{ const h=await api("/health"); state.aiOn=h.ai; $("ai-dot").classList.toggle("on",h.ai); }catch(e){}
   showHome();
 })();
