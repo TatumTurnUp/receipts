@@ -1,0 +1,4 @@
+# Only needed to build a distributable app; not needed to run from source.
+-r requirements.txt
+pyinstaller>=6.6
+cairosvg          # regenerating icons from icon.svg

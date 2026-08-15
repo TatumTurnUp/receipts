@@ -7,9 +7,9 @@ name: tests
 on:
   push:
     branches: [main, dev]
-    tags: ["v*"]
   pull_request:
   workflow_dispatch:
+  workflow_call:   # the release workflow runs this as its gate
 
 jobs:
   test:

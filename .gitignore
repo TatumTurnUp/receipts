@@ -3,3 +3,7 @@ receipts-data/
 __pycache__/
 .pytest_cache/
 *.pyc
+build/
+dist/
+installer/
+build-assets/icon.icns

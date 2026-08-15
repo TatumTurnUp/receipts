@@ -24,6 +24,10 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit
+
+# Names that mean "this machine". Anything else is somebody else.
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", ""}
 
 import requests as http
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -32,10 +36,24 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
+try:
+    from version import CHANNEL as APP_CHANNEL
+    from version import VERSION as APP_VERSION
+except ImportError:  # running from a checkout without version.py
+    APP_VERSION, APP_CHANNEL = "0.0.0-dev", "dev"
+
 # ---------------------------------------------------------------- paths / db
 
-ROOT = Path(__file__).resolve().parent
-LEGACY_DATA = ROOT / "receipts-data"
+FROZEN = getattr(sys, "frozen", False)
+
+# Where bundled read-only assets live. In a packaged build PyInstaller unpacks
+# them to a temporary directory, which is NOT where the executable sits.
+ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+
+# The pre-1.0 archive location: a folder beside the app. Only source installs
+# ever had one, so in a packaged build look beside the executable rather than
+# inside the unpacked bundle.
+LEGACY_DATA = (Path(sys.executable).resolve().parent if FROZEN else ROOT) / "receipts-data"
 
 
 def default_data_dir() -> Path:
@@ -1282,6 +1300,40 @@ def ask_ai(question: str, module_id: Optional[str]) -> dict:
 app = FastAPI(title="Receipts")
 
 
+@app.middleware("http")
+async def only_talk_to_ourselves(request, call_next):
+    """Refuse requests that came from anywhere but this app.
+
+    Receipts listens on 127.0.0.1, which sounds private but is not: any web
+    page the user happens to have open can issue requests to a local port. On
+    a fixed, well-known port that is trivial; a random port makes it harder
+    but not impossible. Since this server will hand back somebody's entire
+    personal archive to whoever asks, "harder" is not the bar.
+
+    Two checks, both cheap:
+      - Origin, when present, must be ours. Browsers attach it to exactly the
+        cross-site requests we want to reject, and omit it on the same-origin
+        navigations we need to keep working (image tags, the export download).
+      - Host must be a loopback name, which stops DNS rebinding — a remote
+        domain re-pointed at 127.0.0.1 to smuggle requests in past the first
+        check.
+    """
+    host = (request.headers.get("host") or "").rsplit(":", 1)[0].strip("[]")
+    if host not in LOOPBACK_HOSTS:
+        return JSONResponse({"detail": "Bad host"}, status_code=400)
+
+    origin = request.headers.get("origin")
+    if origin:
+        # Compare hostnames, not whole origin strings: the port varies run to
+        # run, and "http://127.0.0.1" and "http://127.0.0.1:8765" are both us.
+        if urlsplit(origin).hostname not in LOOPBACK_HOSTS:
+            return JSONResponse(
+                {"detail": "Cross-origin requests are not allowed"}, status_code=403
+            )
+
+    return await call_next(request)
+
+
 class ModuleIn(BaseModel):
     name: str
     type: str = "generic"
@@ -1327,7 +1379,13 @@ class SettingsIn(BaseModel):
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "ai": ai_available()}
+    return {
+        "ok": True,
+        "ai": ai_available(),
+        "version": APP_VERSION,
+        "channel": APP_CHANNEL,
+        "schema_version": SCHEMA_VERSION,
+    }
 
 
 @app.post("/api/restart")

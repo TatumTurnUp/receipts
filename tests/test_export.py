@@ -38,7 +38,10 @@ def client(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
     import app as app_module
 
-    return TestClient(app_module.app), data
+    # A loopback base_url, because the app rejects requests claiming any other
+    # host — TestClient's default "testserver" is exactly what that guards
+    # against.
+    return TestClient(app_module.app, base_url="http://127.0.0.1"), data
 
 
 def test_export_contains_the_whole_archive(client):

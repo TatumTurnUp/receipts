@@ -1,12 +1,7 @@
 #!/bin/bash
-# Receipts launcher (Mac / Linux)
+# Receipts launcher for running from source (Mac / Linux).
+# Most people should install the packaged app instead — see the Releases page.
 cd "$(dirname "$0")"
-
-# already running? just open the browser
-if curl -s -m 2 http://localhost:8765/api/health >/dev/null 2>&1; then
-  xdg-open http://localhost:8765 2>/dev/null || open http://localhost:8765 2>/dev/null
-  exit 0
-fi
 
 if ! command -v python3 >/dev/null; then
   command -v notify-send >/dev/null && notify-send "Receipts" "Python 3 is required — install it from python.org"
@@ -22,4 +17,6 @@ fi
 # keep dependencies in sync with requirements.txt (fast when nothing changed)
 ./.venv/bin/pip install -q -r requirements.txt
 
-exec ./.venv/bin/python app.py
+# launch.py opens Receipts in its own window; it falls back to your browser
+# if this system has no web view available.
+exec ./.venv/bin/python launch.py
