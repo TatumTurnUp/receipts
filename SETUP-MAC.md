@@ -36,9 +36,13 @@ Get Info → Open with → Terminal → "Change All". Or make an alias: drag
 `start.sh` to your Dock's right side. macOS may warn the first time you open
 it ("from an unidentified developer") — right-click → **Open** → Open.
 
-Everything you upload stays on your computer, in a `receipts-data` folder that
-appears next to the app. Nothing is uploaded to any server or cloud (only items
-being analyzed are sent to the AI, and only if you finish Step 4).
+Everything you upload stays on your computer, in `~/Library/Application Support/Receipts`. It sits outside the
+app on purpose, so updating or reinstalling Receipts can never touch it —
+Settings shows you the exact path, and has an **Export everything** button
+that hands you the whole archive as a zip whenever you want it.
+
+Nothing is uploaded to any server or cloud (only items being analyzed are
+sent to the AI, and only if you finish Step 4).
 
 ## Step 4 — Turn on the AI (optional but it's the magic)
 

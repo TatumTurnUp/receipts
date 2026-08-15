@@ -5,15 +5,26 @@ holds their irreplaceable personal archive. Convenience never outranks preservat
 
 ## The Sacred Rules (non-negotiable)
 
-1. **Never touch `receipts-data/`.** That folder is the archive: raw uploads in
-   `files/` (never modified after write — originals are sacred), `receipts.db`
-   (all metadata/history), `config.json`, `backups/`. App code may read/write it
-   at runtime; you as a developer never restructure, migrate-in-place, rename,
-   or "clean up" anything inside it.
+1. **Never touch the archive folder.** It is whatever `app.DATA` resolves to —
+   a per-user OS folder (`~/Library/Application Support/Receipts`,
+   `%LOCALAPPDATA%\Receipts`, `~/.local/share/receipts`), NOT a folder inside
+   the app. It holds raw uploads in `files/` (never modified after write —
+   originals are sacred), `receipts.db`, `config.json`, `backups/`. App code may
+   read/write it at runtime; you as a developer never restructure,
+   migrate-in-place, rename, or "clean up" anything inside it.
+   **The archive must never live inside the application directory.** Receipts
+   ships as a packaged app, and installing an update replaces that directory
+   wholesale — anything stored there is destroyed on the first update. If you
+   find yourself writing a path relative to `ROOT` for anything the user owns,
+   stop. `tests/test_data_location.py` enforces this.
 2. **Database changes are ADDITIVE ONLY.** New tables or new columns with
    defaults, registered in the `MIGRATIONS` dict in `app.py` with a
    `SCHEMA_VERSION` bump. Never `DROP`, never rewrite rows in bulk, never change
    a column's meaning. Old data must remain readable forever.
+   Every bump also requires: a fixture for the outgoing shape in
+   `tests/legacy_schemas.py`, and green tests. Migrations run inside a
+   transaction and are preceded by a permanent, never-pruned snapshot; do not
+   remove either safeguard.
 3. **Every mutation is audited.** Any code path that changes a record or module
    must call `log_change(...)`. The `change_log` table is append-only — never
    delete from it. Deletions log a content snapshot before removing the row.
@@ -23,9 +34,19 @@ holds their irreplaceable personal archive. Convenience never outranks preservat
 5. **Test against a scratch data dir** (`RECEIPTS_DATA=/tmp/... python3 app.py`),
    never against the real archive. Verify: startup with an EXISTING old
    database, upload, search, timeline, history — before delivering changes.
+   Run `pytest tests/` and do not deliver on a red suite.
 6. **When in doubt, back up first.** `backup_db()` keeps daily copies in
-   `receipts-data/backups/` (last 14). Big/risky change? Tell the owner to copy
-   `receipts-data/` somewhere safe before running the new version.
+   `backups/` (last 14); `snapshot_db()` takes permanent ones before schema
+   changes. Big/risky change? Tell the owner to hit **Export everything** in
+   Settings before running the new version.
+7. **The search index is derived, the records are not.** `records_fts` is an
+   external-content FTS5 index. If it drifts out of step with `records`, the
+   update trigger fails with "database disk image is malformed" and takes the
+   whole statement — including a migration — down with it. `ensure_fts_in_sync()`
+   detects and repairs this at startup. Note it reindexes by hand rather than
+   with FTS5 `'rebuild'`: the index declares a column `tags` while `records`
+   stores `tags_json`, so `'rebuild'` cannot work. Keep the column list in
+   `ensure_fts_in_sync()` in step with the triggers.
 
 ## Architecture (current)
 

@@ -30,9 +30,13 @@ No coding needed. Takes about 10 minutes.
    Closing it shuts Receipts down. To use Receipts later, just double-click
    `start.bat` again.
 
-Everything you upload stays on your computer, in a `receipts-data` folder that
-appears next to the app. Nothing is uploaded to any server or cloud (only items
-being analyzed are sent to the AI, and only if you finish Step 4).
+Everything you upload stays on your computer, in `%LOCALAPPDATA%\Receipts`. It sits outside the
+app on purpose, so updating or reinstalling Receipts can never touch it —
+Settings shows you the exact path, and has an **Export everything** button
+that hands you the whole archive as a zip whenever you want it.
+
+Nothing is uploaded to any server or cloud (only items being analyzed are
+sent to the AI, and only if you finish Step 4).
 
 ## Step 4 — Turn on the AI (optional but it's the magic)
 

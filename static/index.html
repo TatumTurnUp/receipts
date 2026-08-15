@@ -1453,7 +1453,7 @@ async function deleteRecord(id){
 
 /* ---------------- settings ---------------- */
 async function openSettings(){
-  const s = await api("/settings");
+  const [s, st] = await Promise.all([api("/settings"), api("/stats").catch(()=>null)]);
   const current = s.model||"claude-sonnet-5";
   let opts = MODELS.map(([v,l])=>`<option value="${v}" ${v===current?"selected":""}>${l}</option>`).join("");
   if(!MODELS.some(([v])=>v===current)) opts += `<option value="${esc(current)}" selected>${esc(current)} (custom)</option>`;
@@ -1467,10 +1467,26 @@ async function openSettings(){
     ${(u=>u.calls? `<div class="kv" style="margin-top:14px"><b>AI usage so far:</b> ${u.calls.toLocaleString()} calls ·
       ${((u.input_tokens||0)/1e6).toFixed(2)}M tokens in / ${((u.output_tokens||0)/1e6).toFixed(2)}M out
       ${u.cache_read_tokens?` · ${((u.cache_read_tokens)/1e6).toFixed(2)}M served from cache (~90% off)`:""}</div>`:"")(s.usage||{})}
+    ${st? `<div style="margin-top:18px;border-top:1px solid var(--line,#2a2a2a);padding-top:14px">
+      <div class="kv"><b>Your archive</b></div>
+      <div class="sub" style="margin:6px 0">${st.records.toLocaleString()} records across ${st.modules.toLocaleString()} modules · archive format v${st.schema_version}</div>
+      <div class="sub" style="margin:6px 0;word-break:break-all;opacity:.75">${esc(st.data_dir)}</div>
+      <div class="sub" style="margin:8px 0">This folder lives outside the app, so updating Receipts never touches it. A dated backup of your database is kept here automatically, plus a permanent copy before any format change.</div>
+      <button class="btn" onclick="exportArchive()" title="Download everything: database, original files, settings">⬇ Export everything</button>
+    </div>`:""}
     <div class="m-actions">
     <button class="btn" onclick="restartApp()" title="Reload the server after a code update — your data is untouched">⟳ Restart app</button>
     <button class="btn" onclick="closeModal()">Cancel</button>
     <button class="btn primary" onclick="saveSettings()">Save</button></div>`);
+}
+async function exportArchive(){
+  toast("<span class='spin'></span>Building your export…", 8000);
+  // A plain navigation, so the browser handles the download and the file
+  // never has to be held in memory here.
+  const a=document.createElement("a");
+  a.href="/api/export"; a.download="";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>toast("Export downloaded — database, files and settings. Your API key is not included."), 2500);
 }
 async function restartApp(){
   if(!await uiConfirm("Restart the app? Takes a few seconds — your data is untouched. Use this after an update to load new code.", "Restart")) return;

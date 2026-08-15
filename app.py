@@ -3,7 +3,10 @@ Receipts — a local, private archive for tracking history about people, places,
 events, and projects. Upload texts, screenshots, links, videos; AI extracts
 context and timestamps; everything is searchable and lands on a timeline.
 
-All data stays on your machine in the ./receipts-data folder.
+All data stays on your machine, in a per-user folder outside the application
+itself (see default_data_dir below) so that updating Receipts can never touch
+it. Set RECEIPTS_DATA to point somewhere else — that is the recommended way to
+keep a scratch archive for development.
 """
 
 import base64
@@ -13,8 +16,11 @@ import os
 import re
 import shutil
 import sqlite3
+import sys
+import tempfile
 import time
 import uuid
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -24,14 +30,78 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 
 # ---------------------------------------------------------------- paths / db
 
 ROOT = Path(__file__).resolve().parent
-DATA = Path(os.environ.get("RECEIPTS_DATA", ROOT / "receipts-data"))
+LEGACY_DATA = ROOT / "receipts-data"
+
+
+def default_data_dir() -> Path:
+    """Where the archive lives: a per-user folder OUTSIDE the application.
+
+    This must never be inside the app folder. Once Receipts ships as a
+    packaged app, installing an update replaces the app folder wholesale —
+    anything stored there would be destroyed on the first update. These
+    OS-standard locations belong to the user, not to the app, and survive
+    updates, reinstalls and uninstalls.
+    """
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Receipts"
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        return Path(base) / "Receipts"
+    base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return Path(base) / "receipts"
+
+
+def adopt_legacy_data(dest: Path) -> bool:
+    """One-time relocation of a pre-1.0 ./receipts-data archive into `dest`.
+
+    Deliberately a COPY, never a move: the original is left exactly where it
+    is as a manual safety net, with a note explaining that it is no longer
+    live. Runs only when the destination has no database yet, so it can never
+    overwrite a newer archive.
+    """
+    if not (LEGACY_DATA / "receipts.db").exists() or (dest / "receipts.db").exists():
+        return False
+    print(f"\n  Moving your archive to:\n    {dest}")
+    print("  (the old copy is left in place, untouched, as a safety net)\n")
+    dest.mkdir(parents=True, exist_ok=True)
+    for item in LEGACY_DATA.iterdir():
+        target = dest / item.name
+        if target.exists():
+            continue
+        if item.is_dir():
+            shutil.copytree(item, target)
+        else:
+            shutil.copy2(item, target)
+    try:
+        (LEGACY_DATA / "MOVED-README.txt").write_text(
+            "This folder is no longer used by Receipts.\n\n"
+            f"Your live archive now lives at:\n    {dest}\n\n"
+            "It was moved there so that updating Receipts can never overwrite it.\n"
+            "This copy was left behind on purpose. Once you have opened Receipts\n"
+            "and confirmed all of your records are present, it is safe to delete.\n"
+        )
+    except Exception:
+        pass
+    return True
+
+
+_env_data = os.environ.get("RECEIPTS_DATA")
+DATA = Path(_env_data).expanduser() if _env_data else default_data_dir()
+if not _env_data:
+    adopt_legacy_data(DATA)
+
 FILES = DATA / "files"
 DB_PATH = DATA / "receipts.db"
 CONFIG_PATH = DATA / "config.json"
+
+# Captured before init_db() creates anything, so migrate() can tell a genuine
+# pre-existing archive apart from a database being created for the first time.
+DB_EXISTED_AT_STARTUP = DB_PATH.exists()
 
 DATA.mkdir(parents=True, exist_ok=True)
 FILES.mkdir(parents=True, exist_ok=True)
@@ -114,14 +184,30 @@ MIGRATIONS: dict = {
 }
 
 
+class ArchiveTooNewError(RuntimeError):
+    """Raised when the archive was written by a newer Receipts than this one."""
+
+
+# Daily rolling backups are named receipts-YYYYMMDD.db and pruned to the last
+# 14. Pre-migration snapshots are named snapshot-*.db and are NEVER pruned —
+# this pattern is what keeps the two apart.
+DAILY_BACKUP_RE = re.compile(r"^receipts-\d{8}\.db$")
+
+
+def backup_dir() -> Path:
+    bdir = DATA / "backups"
+    bdir.mkdir(parents=True, exist_ok=True)
+    return bdir
+
+
 def backup_db():
+    """Rolling daily backup of the database. Last 14 kept."""
     if not DB_PATH.exists():
         return
-    bdir = DATA / "backups"
-    bdir.mkdir(exist_ok=True)
+    bdir = backup_dir()
     today = datetime.now().strftime("%Y%m%d")
-    existing = sorted(bdir.glob("receipts-*.db"))
-    if any(today in b.name for b in existing):
+    existing = sorted(p for p in bdir.glob("receipts-*.db") if DAILY_BACKUP_RE.match(p.name))
+    if any(p.name == f"receipts-{today}.db" for p in existing):
         return
     shutil.copy2(DB_PATH, bdir / f"receipts-{today}.db")
     for old in existing[:-13]:
@@ -131,16 +217,107 @@ def backup_db():
             pass
 
 
+def snapshot_db(label: str) -> Optional[Path]:
+    """A permanent, never-pruned copy of the database.
+
+    Taken immediately before any schema change. The daily backup is not
+    sufficient on its own: it can be up to a day stale, and it is pruned after
+    two weeks — so a migration that quietly damaged something three weeks ago
+    would have no clean copy left to recover from. These are one per schema
+    change rather than one per day, and they are small.
+    """
+    if not DB_PATH.exists():
+        return None
+    dest = backup_dir() / f"snapshot-{label}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.db"
+    shutil.copy2(DB_PATH, dest)
+    return dest
+
+
+def ensure_fts_in_sync(conn: sqlite3.Connection):
+    """Repair the full-text index if it has drifted out of sync with records.
+
+    records_fts is an external-content FTS5 table: it holds only the index,
+    and the triggers on `records` keep the two in step. If they ever diverge —
+    an archive restored from a backup, one that predates the index, or a row
+    written while the triggers were absent — then the delete half of the
+    update trigger tries to remove index entries that were never added, and
+    SQLite fails the whole statement with "database disk image is malformed".
+
+    A migration is exactly such an UPDATE, which means a drifted index turns
+    an ordinary update into a hard failure on someone's real archive. Checking
+    and reindexing first costs milliseconds and removes that entire class of
+    failure.
+
+    The reindex below is done by hand rather than with FTS5's built-in
+    'rebuild'. 'rebuild' re-reads the content table by column name, and this
+    index declares a column `tags` while `records` stores it as `tags_json` —
+    so 'rebuild' fails outright. The triggers work because they pass values
+    explicitly; this does the same.
+    """
+    try:
+        n_records = conn.execute("SELECT COUNT(*) FROM records").fetchone()[0]
+        n_indexed = conn.execute("SELECT COUNT(*) FROM records_fts_docsize").fetchone()[0]
+    except sqlite3.DatabaseError:
+        n_records, n_indexed = 1, 0  # can't tell — reindex to be safe
+
+    if n_records == n_indexed:
+        return
+
+    print(f"  Search index out of step ({n_indexed} indexed vs {n_records} records) — reindexing.")
+    conn.execute("INSERT INTO records_fts(records_fts) VALUES('delete-all')")
+    conn.execute(
+        "INSERT INTO records_fts(rowid, title, body, description, tags, user_context) "
+        "SELECT rowid, title, body, description, tags_json, user_context FROM records"
+    )
+
+
 def migrate(conn: sqlite3.Connection):
     v = conn.execute("PRAGMA user_version").fetchone()[0]
-    for target in range(v + 1, SCHEMA_VERSION + 1):
-        for sql in MIGRATIONS.get(target, []):
-            try:
-                conn.execute(sql)
-            except sqlite3.OperationalError as e:
-                if "duplicate column" not in str(e).lower():
-                    raise
-    conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+
+    # Refuse to touch an archive written by a newer version. Without this, an
+    # older build (a beta tester rolling back to stable, say) would happily run
+    # its own queries against a schema it does not understand and write
+    # inconsistent rows into real data.
+    if v > SCHEMA_VERSION:
+        raise ArchiveTooNewError(
+            f"This archive was created by a newer version of Receipts "
+            f"(archive format v{v}; this copy of Receipts understands v{SCHEMA_VERSION}).\n"
+            f"  Update Receipts to open it. Nothing has been modified."
+        )
+
+    if v == SCHEMA_VERSION:
+        return
+
+    snap = snapshot_db(f"pre-v{v}-to-v{SCHEMA_VERSION}") if DB_EXISTED_AT_STARTUP else None
+    if snap:
+        print(f"  Updating archive format v{v} → v{SCHEMA_VERSION}. Backup saved: {snap.name}")
+
+    # All-or-nothing: a migration that fails halfway leaves the archive exactly
+    # as it was, rather than half-converted.
+    prev_isolation = conn.isolation_level
+    conn.isolation_level = None
+    try:
+        conn.execute("BEGIN")
+        for target in range(v + 1, SCHEMA_VERSION + 1):
+            for sql in MIGRATIONS.get(target, []):
+                try:
+                    conn.execute(sql)
+                except sqlite3.OperationalError as e:
+                    if "duplicate column" not in str(e).lower():
+                        raise
+        conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        conn.execute("COMMIT")
+    except Exception:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
+        if snap:
+            print(f"\n  Archive update failed — your data was rolled back and is unchanged.")
+            print(f"  A copy from before the attempt is at: {snap}\n")
+        raise
+    finally:
+        conn.isolation_level = prev_isolation
 
 
 def init_db():
@@ -232,6 +409,7 @@ def init_db():
         END;
         """
     )
+    ensure_fts_in_sync(conn)
     migrate(conn)
     # backfill the tag registry from any tags already living on modules
     try:
@@ -245,8 +423,32 @@ def init_db():
     conn.close()
 
 
-backup_db()
-init_db()
+def check_archive_version():
+    """Fail fast, before any table creation, if the archive is from the future."""
+    if not DB_EXISTED_AT_STARTUP:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        v = conn.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        conn.close()
+    if v > SCHEMA_VERSION:
+        raise ArchiveTooNewError(
+            f"This archive was created by a newer version of Receipts "
+            f"(archive format v{v}; this copy of Receipts understands v{SCHEMA_VERSION}).\n"
+            f"  Update Receipts to open it. Nothing has been modified."
+        )
+
+
+try:
+    check_archive_version()
+    backup_db()
+    init_db()
+except ArchiveTooNewError as e:
+    print("\n  Receipts could not open your archive.\n")
+    print(f"  {e}\n")
+    print(f"  Archive location: {DATA}\n")
+    raise SystemExit(1)
 
 # ------------------------------------------------------------------ helpers
 
@@ -1159,7 +1361,73 @@ def stats():
         "total_bytes": files_bytes + db_bytes,
         "records": records,
         "modules": modules,
+        "data_dir": str(DATA),
+        "schema_version": SCHEMA_VERSION,
     }
+
+
+EXPORT_README = """\
+Receipts — full archive export
+==============================
+
+This zip contains everything Receipts knows about your archive:
+
+  receipts.db   The database: every record, module, tag, amendment and
+                audit-log entry. Plain SQLite — openable with any SQLite
+                browser, forever, with or without Receipts.
+  files/        Every original file you uploaded, unmodified.
+  config.json   Your settings. Any API key has been removed on purpose,
+                so this export is safe to store or send somewhere.
+
+To restore: close Receipts, copy receipts.db and files/ into your archive
+folder (shown in Settings), and open Receipts again.
+
+Nothing here is locked to Receipts. That is the point.
+"""
+
+
+@app.get("/api/export")
+def export_archive():
+    """Download the entire archive as a zip. The user's escape hatch."""
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    tmp = Path(tempfile.mkdtemp(prefix="receipts-export-"))
+    out = tmp / f"receipts-export-{stamp}.zip"
+
+    # sqlite's own backup API, so the copy is consistent even if a write is
+    # in flight — a plain file copy of a live database can be torn.
+    snap = tmp / "receipts.db"
+    src = sqlite3.connect(DB_PATH)
+    dst = sqlite3.connect(snap)
+    try:
+        with dst:
+            src.backup(dst)
+    finally:
+        dst.close()
+        src.close()
+
+    cfg = load_config()
+    cfg["anthropic_api_key"] = ""  # never ship a key inside an export
+
+    try:
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+            z.write(snap, "receipts.db")
+            z.writestr("config.json", json.dumps(cfg, indent=2))
+            z.writestr("README.txt", EXPORT_README)
+            for p in sorted(FILES.rglob("*")):
+                if p.is_file():
+                    z.write(p, f"files/{p.relative_to(FILES)}")
+    except Exception:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+    finally:
+        snap.unlink(missing_ok=True)
+
+    return FileResponse(
+        out,
+        filename=out.name,
+        media_type="application/zip",
+        background=BackgroundTask(lambda: shutil.rmtree(tmp, ignore_errors=True)),
+    )
 
 
 @app.get("/api/settings")

@@ -33,19 +33,57 @@ Designed to swap to a local model later: the AI layer is one small section in `a
 
 ## Where your data lives
 
-Everything is in the `receipts-data/` folder next to the app:
+Everything is in one folder, kept **outside the app** so that updating,
+reinstalling or deleting Receipts can never touch it:
+
+| Your system | Where the archive lives |
+|---|---|
+| macOS | `~/Library/Application Support/Receipts` |
+| Windows | `%LOCALAPPDATA%\Receipts` |
+| Linux | `~/.local/share/receipts` |
+
+Settings shows you the exact path on your machine. Inside it:
 
 - `files/` — your raw uploads, untouched
 - `receipts.db` — all metadata, timestamps, AI analysis, search index
 - `config.json` — your settings and API key
+- `backups/` — automatic daily copies of the database (last 14 kept), plus a
+  permanent `snapshot-*.db` taken before any change to the database format
 
-- `backups/` — automatic daily copies of the database (last 14 kept)
+**Back up or move your whole archive by copying that one folder.** Delete it and
+you start fresh. You can also point it anywhere (a NAS mount, an external drive)
+by setting the `RECEIPTS_DATA` environment variable before launch.
 
-**Back up or move the whole app by copying this one folder.** Delete `receipts-data` and you start fresh. You can also point the data folder anywhere (like a NAS mount) by setting the `RECEIPTS_DATA` environment variable before launch.
+Upgrading from an older version that kept a `receipts-data/` folder next to the
+app? Receipts moves it for you on first launch, and deliberately leaves the
+original where it was as a safety net.
 
 ## Built to last
 
-This app is designed so future updates can't destroy your archive: your data lives entirely in `receipts-data/`, separate from the code; raw files are never modified after upload; database changes only ever *add* — nothing is dropped or rewritten; every edit to any record (by you or the AI) is logged in an append-only history (📜 History button on any record), and deletions preserve a snapshot. `CLAUDE.md` in this folder is a binding instruction file for any future AI session that edits this project — it enforces these rules and carries the roadmap (cross-module linking, local models, NAS storage).
+This app is designed so future updates can't destroy your archive:
+
+- Your data lives outside the application entirely, so replacing the app can't
+  reach it.
+- Raw files are never modified after upload.
+- Database changes are **additive only** — nothing is dropped or rewritten — and
+  they run in a transaction, so a failed update rolls back and leaves your
+  archive exactly as it was.
+- A permanent backup is taken immediately before any database format change, and
+  is never pruned.
+- Receipts refuses to open an archive written by a *newer* version rather than
+  risk writing bad data into it.
+- Every edit to any record (by you or the AI) is logged in an append-only
+  history (📜 History on any record), and deletions preserve a snapshot.
+- **Export everything** in Settings gives you a zip with the database and every
+  original file, at any time, for any reason.
+
+Those guarantees are enforced by a test suite (`tests/`) that runs on macOS,
+Windows and Linux on every change: it opens archives saved in each historical
+format and asserts that not one row is lost, altered or reordered.
+
+`CLAUDE.md` is a binding instruction file for any future AI session that edits
+this project — it enforces these rules and carries the roadmap (cross-module
+linking, local models, NAS storage).
 
 ## Notes
 
