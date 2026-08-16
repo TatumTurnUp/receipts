@@ -6,6 +6,7 @@ destroyed on the first update — silently, and completely.
 """
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -35,9 +36,31 @@ def no_legacy_folder():
         shutil.move(str(stash), str(LEGACY))
 
 
+def expected_default_dir(home: Path) -> Path:
+    """Where the archive should land, for the platform the test is running on."""
+    if sys.platform == "darwin":
+        return home / "Library" / "Application Support" / "Receipts"
+    if os.name == "nt":
+        return home / "AppData" / "Local" / "Receipts"
+    return home / ".local" / "share" / "receipts"
+
+
 def run_with_home(home: Path):
-    """Import app.py with no RECEIPTS_DATA, so the default location is used."""
-    env = child_env(HOME=home, XDG_DATA_HOME=home / ".local" / "share")
+    """Import app.py with no RECEIPTS_DATA, so the default location is used.
+
+    Every variable each platform consults has to be redirected, not just HOME:
+    Python's expanduser ignores HOME on Windows and reads USERPROFILE, and
+    default_data_dir() checks LOCALAPPDATA before falling back to it. Setting
+    only HOME meant these tests quietly used the real AppData folder on
+    Windows — writing outside the sandbox and failing on a path that had
+    nothing to do with tmp_path.
+    """
+    env = child_env(
+        HOME=home,
+        USERPROFILE=home,
+        LOCALAPPDATA=home / "AppData" / "Local",
+        XDG_DATA_HOME=home / ".local" / "share",
+    )
     env.pop("RECEIPTS_DATA", None)  # the point is to use the default location
     proc = subprocess.run(
         [sys.executable, "-c", PROBE], cwd=APP_ROOT, env=env,
@@ -54,7 +77,9 @@ def test_default_location_is_outside_the_app_folder(tmp_path, no_legacy_folder):
     assert APP_ROOT.resolve() not in data_dir.parents and data_dir != APP_ROOT.resolve(), (
         f"archive at {data_dir} is inside the app folder — an update would destroy it"
     )
-    assert str(tmp_path) in str(data_dir)
+    assert data_dir == expected_default_dir(tmp_path).resolve(), (
+        f"archive landed at {data_dir}, expected {expected_default_dir(tmp_path)}"
+    )
 
 
 def test_legacy_archive_is_adopted_without_being_destroyed(tmp_path, no_legacy_folder):
@@ -84,7 +109,7 @@ def test_legacy_archive_is_adopted_without_being_destroyed(tmp_path, no_legacy_f
 def test_adoption_never_overwrites_an_existing_archive(tmp_path, no_legacy_folder):
     """If the user already has a real archive, a stale ./receipts-data loses."""
     home = tmp_path
-    existing = home / ".local" / "share" / "receipts"
+    existing = expected_default_dir(home)
     legacy_schemas.build(existing / "receipts.db", 7)
     marker = existing / "files" / "keepme.txt"
     marker.parent.mkdir(parents=True, exist_ok=True)

@@ -212,3 +212,59 @@ def test_exported_database_opens_after_a_round_trip(app_module, tmp_path):
     )
     conn.close()
     assert json.loads(z.read("config.json"))["anthropic_api_key"] == ""
+
+
+# ------------------------------------------------- where the archive lands
+
+@pytest.mark.parametrize(
+    "platform,osname,expected_tail",
+    [
+        ("darwin", "posix", ("Library", "Application Support", "Receipts")),
+        ("win32", "nt", ("AppData", "Local", "Receipts")),
+        ("linux", "posix", (".local", "share", "receipts")),
+    ],
+)
+def test_default_archive_location_per_platform(
+    app_module, monkeypatch, tmp_path, platform, osname, expected_tail
+):
+    """Pin all three layouts from one machine.
+
+    Two of the three would otherwise only be exercised on a CI runner, which is
+    a slow and indirect way to discover the path is wrong — and the Windows one
+    was wrong.
+    """
+    app, _ = app_module
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    home = tmp_path / "home"
+
+    got = app.default_data_dir(platform=platform, osname=osname, home=home)
+    assert got == home.joinpath(*expected_tail), f"{platform}: got {got}"
+
+
+def test_windows_honours_localappdata_when_set(app_module, monkeypatch, tmp_path):
+    app, _ = app_module
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Custom"))
+    got = app.default_data_dir(platform="win32", osname="nt", home=tmp_path / "home")
+    assert got == tmp_path / "Custom" / "Receipts"
+
+
+def test_linux_honours_xdg_data_home(app_module, monkeypatch, tmp_path):
+    app, _ = app_module
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    got = app.default_data_dir(platform="linux", osname="posix", home=tmp_path / "home")
+    assert got == tmp_path / "xdg" / "receipts"
+
+
+def test_the_archive_is_never_inside_the_application(app_module, monkeypatch, tmp_path):
+    """The one invariant that has to hold on every platform."""
+    app, _ = app_module
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    for platform, osname in (("darwin", "posix"), ("win32", "nt"), ("linux", "posix")):
+        data_dir = app.default_data_dir(
+            platform=platform, osname=osname, home=tmp_path / "home"
+        )
+        assert APP_ROOT.resolve() not in data_dir.resolve().parents, (
+            f"{platform}: archive would sit inside the app and be destroyed by an update"
+        )

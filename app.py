@@ -57,7 +57,7 @@ ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 LEGACY_DATA = None if FROZEN else ROOT / "receipts-data"
 
 
-def default_data_dir() -> Path:
+def default_data_dir(platform: str = "", osname: str = "", home: Optional[Path] = None) -> Path:
     """Where the archive lives: a per-user folder OUTSIDE the application.
 
     This must never be inside the app folder. Once Receipts ships as a
@@ -65,14 +65,23 @@ def default_data_dir() -> Path:
     anything stored there would be destroyed on the first update. These
     OS-standard locations belong to the user, not to the app, and survive
     updates, reinstalls and uninstalls.
+
+    The three arguments exist only so tests can check all three layouts from
+    one machine. Faking the platform globally is not an option: pathlib refuses
+    to build a WindowsPath on Linux, so patching sys.platform breaks the test
+    runner itself. Passing them in keeps every branch reachable everywhere.
     """
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "Receipts"
-    if os.name == "nt":
-        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-        return Path(base) / "Receipts"
-    base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
-    return Path(base) / "receipts"
+    platform = platform or sys.platform
+    osname = osname or os.name
+    home = home or Path.home()
+
+    if platform == "darwin":
+        return home / "Library" / "Application Support" / "Receipts"
+    if osname == "nt":
+        base = os.environ.get("LOCALAPPDATA")
+        return (Path(base) if base else home / "AppData" / "Local") / "Receipts"
+    base = os.environ.get("XDG_DATA_HOME")
+    return (Path(base) if base else home / ".local" / "share") / "receipts"
 
 
 def adopt_legacy_data(dest: Path) -> bool:
