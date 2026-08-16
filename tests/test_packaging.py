@@ -173,3 +173,28 @@ def test_ci_runs_on_the_branch_you_are_working_on():
     """Work happens on feature branches; CI that only watches main is decoration."""
     tests_wf = (APP_ROOT / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
     assert 'branches: ["**"]' in tests_wf
+
+
+def test_install_instructions_exist_and_cover_every_platform():
+    """The first thing a new user hits is a security warning. If the download
+    page does not explain it, the app looks broken rather than unsigned."""
+    install = _read(APP_ROOT / "INSTALL.md")
+    for needed in ("macos-arm64.dmg", "macos-intel.dmg", "Receipts-Setup", ".AppImage"):
+        assert needed in install, f"INSTALL.md never mentions {needed}"
+    assert "Open Anyway" in install, "no macOS Gatekeeper instructions"
+    assert "Run anyway" in install, "no Windows SmartScreen instructions"
+    assert "chmod +x" in install, "no Linux AppImage instructions"
+
+
+def test_release_notes_warn_about_the_unsigned_warnings():
+    assert "Open Anyway" in RELEASE and "Run anyway" in RELEASE
+
+
+def test_install_guide_does_not_give_obsolete_mac_advice():
+    """Apple removed the Control-click bypass in macOS Sequoia; telling people
+    to right-click and Open now sends them down a path that does not work."""
+    install = _read(APP_ROOT / "INSTALL.md")
+    body = "\n".join(
+        line for line in install.splitlines() if not line.strip().startswith(">")
+    )
+    assert "right-click" not in body.lower() or "Open Anyway" in body

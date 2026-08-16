@@ -184,7 +184,7 @@ jobs:
         run: |
           hdiutil create -volname "Receipts" -srcfolder "dist/Receipts.app" \
             -ov -format UDZO "dist/Receipts.dmg"
-          echo "::warning::Unsigned macOS build — users will need to right-click → Open."
+          echo "::warning::Unsigned macOS build - users must approve it in System Settings > Privacy & Security > Open Anyway."
 
       - name: Name the macOS artifact
         if: startsWith(matrix.os, 'macos')
@@ -280,7 +280,17 @@ jobs:
             | Windows | `Receipts-Setup-${{ needs.version.outputs.version }}.exe` |
             | Linux | `Receipts-${{ needs.version.outputs.version }}-x86_64.AppImage` |
 
+            **Mac and Windows will warn you the first time.** Receipts isn't
+            signed with a developer certificate yet, so neither system
+            recognises the publisher.
+            On Mac: System Settings → Privacy & Security → **Open Anyway**.
+            On Windows: **More info** → **Run anyway**.
+            Once only — see
+            [INSTALL.md](https://github.com/TatumTurnUp/receipts/blob/main/INSTALL.md)
+            for the full walkthrough.
+
             **Your archive is safe.** Installing this replaces only the app.
             Your records, files and settings live in a separate per-user folder
             (shown in Settings) and are never touched by an update. A permanent
-            backup is taken before any change to the database format.
+            backup is taken before any change to the archive format, and a
+            failed update rolls back rather than leaving things half-changed.
