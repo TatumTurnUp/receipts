@@ -150,3 +150,26 @@ def test_version_is_stamped_from_the_tag():
 
 def test_beta_tags_publish_as_prereleases():
     assert "-beta" in RELEASE and "prerelease" in RELEASE
+
+
+def test_version_label_does_not_repeat_the_channel():
+    """A beta build should say beta once, not twice."""
+    src = (APP_ROOT / "version.py").read_text(encoding="utf-8")
+    for raw, channel, expected in [
+        ("0.9.0", "stable", "0.9.0"),
+        ("0.9.0-beta.1", "beta", "0.9.0-beta.1"),   # not "0.9.0-beta.1 (beta)"
+        ("1.0.0", "beta", "1.0.0 (beta)"),          # the number alone gives no hint
+    ]:
+        stamped = re.sub(r'^VERSION = ".*"$', f'VERSION = "{raw}"', src, flags=re.M)
+        stamped = re.sub(r'^CHANNEL = ".*?"', f'CHANNEL = "{channel}"', stamped, flags=re.M)
+        ns: dict = {}
+        exec(compile(stamped, "version.py", "exec"), ns)
+        assert ns["display_version"]() == expected, (
+            f"{raw}/{channel} showed {ns['display_version']()!r}, expected {expected!r}"
+        )
+
+
+def test_ci_runs_on_the_branch_you_are_working_on():
+    """Work happens on feature branches; CI that only watches main is decoration."""
+    tests_wf = (APP_ROOT / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
+    assert 'branches: ["**"]' in tests_wf
