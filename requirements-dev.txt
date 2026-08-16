@@ -1,4 +1,8 @@
 # Running the test suite.
 -r requirements.txt
 pytest
+# Starlette's TestClient moved from httpx to httpx2; which one it picks depends
+# on the installed Starlette version, so both are listed. Test-only — neither
+# ships in the app.
+httpx2
 httpx
