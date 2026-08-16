@@ -51,9 +51,10 @@ FROZEN = getattr(sys, "frozen", False)
 ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 
 # The pre-1.0 archive location: a folder beside the app. Only source installs
-# ever had one, so in a packaged build look beside the executable rather than
-# inside the unpacked bundle.
-LEGACY_DATA = (Path(sys.executable).resolve().parent if FROZEN else ROOT) / "receipts-data"
+# ever had one, so a packaged build has nothing to look for — and the paths it
+# would look at sit inside the installed application, which must never be
+# written to.
+LEGACY_DATA = None if FROZEN else ROOT / "receipts-data"
 
 
 def default_data_dir() -> Path:
@@ -82,6 +83,12 @@ def adopt_legacy_data(dest: Path) -> bool:
     live. Runs only when the destination has no database yet, so it can never
     overwrite a newer archive.
     """
+    # A packaged build never has one: only source installs kept the archive
+    # beside the app. Looking anyway would point at a path inside the installed
+    # application, and the note written below would be a write into the bundle —
+    # invalidating the macOS signature, and destroyed by the next update.
+    if LEGACY_DATA is None:
+        return False
     if not (LEGACY_DATA / "receipts.db").exists() or (dest / "receipts.db").exists():
         return False
     print(f"\n  Moving your archive to:\n    {dest}")
@@ -101,7 +108,8 @@ def adopt_legacy_data(dest: Path) -> bool:
             f"Your live archive now lives at:\n    {dest}\n\n"
             "It was moved there so that updating Receipts can never overwrite it.\n"
             "This copy was left behind on purpose. Once you have opened Receipts\n"
-            "and confirmed all of your records are present, it is safe to delete.\n"
+            "and confirmed all of your records are present, it is safe to delete.\n",
+            encoding="utf-8",
         )
     except Exception:
         pass
@@ -138,14 +146,14 @@ def load_config() -> dict:
     cfg = dict(DEFAULT_CONFIG)
     if CONFIG_PATH.exists():
         try:
-            cfg.update(json.loads(CONFIG_PATH.read_text()))
+            cfg.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
         except Exception:
             pass
     return cfg
 
 
 def save_config(cfg: dict):
-    CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
+    CONFIG_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
 
 def db() -> sqlite3.Connection:
@@ -458,17 +466,133 @@ def check_archive_version():
         )
 
 
+def report_fatal(title: str, detail: str) -> None:
+    """Tell the user why Receipts is not starting, without a terminal.
+
+    A packaged build is windowed: there is no console, so sys.stdout is None on
+    Windows and inside a macOS .app, and print() is a silent no-op. Exiting via
+    SystemExit is a *clean* exit, so PyInstaller's crash dialog does not fire
+    either. Without this, a beta tester who rolls back to the stable build
+    double-clicks Receipts and absolutely nothing happens — no window, no
+    message, nothing to send us.
+
+    So: always leave a log file next to the archive, and put a native dialog on
+    screen when there is no console to print to.
+    """
+    message = f"{title}\n\n{detail}\n\nArchive location:\n{DATA}"
+
+    try:
+        (DATA / "startup-error.log").write_text(
+            f"{datetime.now().isoformat(timespec='seconds')}\n{message}\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+    if sys.stdout is not None:
+        print(f"\n  {title}\n\n  {detail}\n\n  Archive location: {DATA}\n")
+        return
+
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            ctypes.windll.user32.MessageBoxW(0, message, "Receipts", 0x10)
+        elif sys.platform == "darwin":
+            import subprocess
+
+            subprocess.run(
+                ["osascript", "-e",
+                 f'display dialog {json.dumps(message)} with icon stop '
+                 f'buttons {{"OK"}} default button "OK" with title "Receipts"'],
+                check=False, timeout=120,
+            )
+    except Exception:
+        pass
+
+
 try:
     check_archive_version()
     backup_db()
     init_db()
 except ArchiveTooNewError as e:
-    print("\n  Receipts could not open your archive.\n")
-    print(f"  {e}\n")
-    print(f"  Archive location: {DATA}\n")
+    report_fatal("Receipts could not open your archive.", str(e))
     raise SystemExit(1)
+except Exception as e:  # noqa: BLE001 — last line before a silent failure
+    report_fatal(
+        "Receipts could not start.",
+        f"{type(e).__name__}: {e}\n\n"
+        "Your archive has not been modified. If this keeps happening, send "
+        "this message along with startup-error.log from the folder below.",
+    )
+    raise
 
 # ------------------------------------------------------------------ helpers
+
+PENDING_DELETE_SUFFIX = ".pending-delete"
+
+
+def remove_stored_file(file_name: str) -> None:
+    """Delete an uploaded file, and make sure it really goes.
+
+    POSIX lets you unlink a file something still has open. Windows does not —
+    it raises, and by then the caller has already deleted the database row, so
+    nothing ever retries: the interface says the record is gone while the
+    original sits on disk forever. In a privacy-first archive, "deleted" has to
+    mean deleted.
+
+    So: try the delete, and if the file is locked, rename it out of the way and
+    let the next startup finish the job.
+    """
+    target = FILES / file_name
+    try:
+        target.unlink(missing_ok=True)
+        return
+    except OSError:
+        pass
+    try:
+        target.rename(target.with_name(target.name + PENDING_DELETE_SUFFIX))
+    except OSError:
+        pass
+
+
+def sweep_pending_deletes() -> None:
+    """Finish any deletes a file lock blocked last time."""
+    try:
+        for leftover in FILES.glob("*" + PENDING_DELETE_SUFFIX):
+            try:
+                leftover.unlink()
+            except OSError:
+                pass  # still locked — try again next launch
+    except OSError:
+        pass
+
+
+def sweep_stale_exports() -> None:
+    """Delete export staging folders left behind by interrupted downloads.
+
+    The export zip is built in a temp folder and cleaned up by a background
+    task that only runs once the response has been fully sent. Cancel the
+    download, or close the window mid-transfer, and that cleanup never runs —
+    leaving a complete, unencrypted copy of the entire archive sitting in the
+    system temp folder. Linux usually clears /tmp at boot; Windows never clears
+    %TEMP% by itself, and macOS only after days of disuse.
+    """
+    cutoff = time.time() - 3600
+    try:
+        for stale in Path(tempfile.gettempdir()).glob("receipts-export-*"):
+            try:
+                if stale.is_dir() and stale.stat().st_mtime < cutoff:
+                    shutil.rmtree(stale, ignore_errors=True)
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+sweep_pending_deletes()
+sweep_stale_exports()
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -532,8 +656,8 @@ def exif_datetime(path: Path) -> Optional[str]:
         from PIL import Image
         from PIL.ExifTags import TAGS
 
-        img = Image.open(path)
-        exif = img.getexif()
+        with Image.open(path) as img:
+            exif = img.getexif()
         if not exif:
             return None
         by_name = {TAGS.get(k, k): v for k, v in exif.items()}
@@ -593,16 +717,20 @@ def prepare_image_for_ai(path: Path, mime: str):
         import io
 
         from PIL import Image, ImageOps
-        img = Image.open(path)
-        img = ImageOps.exif_transpose(img)
-        w, h = img.size
-        scale = 1568 / max(w, h)
-        if scale < 1:
-            img = img.resize((max(1, int(w * scale)), max(1, int(h * scale))))
-        if img.mode not in ("RGB", "L"):
-            img = img.convert("RGB")
-        buf = io.BytesIO()
-        img.save(buf, "JPEG", quality=85)
+
+        # `with`, because PIL keeps the file handle open lazily and Windows
+        # refuses to delete a file anything still holds open — a record deleted
+        # right after upload would leave its original on disk forever.
+        with Image.open(path) as opened:
+            img = ImageOps.exif_transpose(opened)
+            w, h = img.size
+            scale = 1568 / max(w, h)
+            if scale < 1:
+                img = img.resize((max(1, int(w * scale)), max(1, int(h * scale))))
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            buf = io.BytesIO()
+            img.save(buf, "JPEG", quality=85)
         data = buf.getvalue()
         if len(data) < path.stat().st_size or path.stat().st_size > 4_500_000:
             return base64.b64encode(data).decode(), "image/jpeg"
@@ -962,7 +1090,7 @@ def analyze_record(record: dict, file_path: Optional[Path]) -> dict:
                     meta += f"\n\n(PDF too large to attach and text extraction failed: {e})"
         elif mime in ANALYZABLE_TEXT_MIMES and size <= 2_000_000:
             try:
-                meta += "\n\nFile contents:\n" + file_path.read_text(errors="replace")[:20_000]
+                meta += "\n\nFile contents:\n" + file_path.read_text(encoding="utf-8", errors="replace")[:20_000]
             except Exception:
                 pass
     if record.get("ts_source") == "none":
@@ -1390,12 +1518,28 @@ def health():
 
 @app.post("/api/restart")
 def restart():
-    """Re-exec the server process so it picks up updated code. Data is untouched."""
-    import sys
-    import threading
+    """Re-exec the server so it picks up edited code. Data is untouched.
+
+    This exists for the edit-and-refresh loop when running from source. A
+    packaged build has no code to pick up, and re-execing one is actively
+    harmful: Windows has no real exec — CreateProcess leaves the old process
+    briefly alive still holding the listening socket, so the replacement binds
+    a different port while the page keeps polling the old one and hangs. In a
+    frozen build sys.argv[0] is already the executable, so the argv list grows
+    by one every restart. And exec from a timer thread while the native window
+    owns the main thread tears the window down with no cleanup.
+    """
+    if FROZEN:
+        raise HTTPException(
+            400,
+            "Restart is only available when running Receipts from source. "
+            "Quit and reopen the app instead.",
+        )
 
     def _reexec():
         os.environ["RECEIPTS_NO_BROWSER"] = "1"  # don't open a second tab
+        # sys.argv[0] is the script path here (not frozen), so this rebuilds
+        # the original command line exactly rather than duplicating argv[0].
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
     threading.Timer(0.6, _reexec).start()
@@ -1772,10 +1916,7 @@ def delete_module(mid: str):
     conn.commit()
     conn.close()
     for f in files:
-        try:
-            (FILES / f).unlink(missing_ok=True)
-        except Exception:
-            pass
+        remove_stored_file(f)
     return {"ok": True}
 
 
@@ -2020,10 +2161,7 @@ def delete_record(rid: str):
     conn.commit()
     conn.close()
     if rec.get("file_name"):
-        try:
-            (FILES / rec["file_name"]).unlink(missing_ok=True)
-        except Exception:
-            pass
+        remove_stored_file(rec["file_name"])
     return {"ok": True}
 
 

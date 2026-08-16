@@ -32,6 +32,9 @@ PREFERRED_PORT = 8765
 ASSETS = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 
 
+APP_ID = "receipts"  # must match receipts.desktop and the installed icon name
+
+
 def window_icon():
     """Path to the window icon, or None if the platform sets it another way.
 
@@ -43,6 +46,60 @@ def window_icon():
         return None
     icon = ASSETS / "build-assets" / "icon.png"
     return str(icon) if icon.exists() else None
+
+
+def set_app_identity() -> None:
+    """Tell the desktop which application this window belongs to.
+
+    Under X11 a window can hand the window manager a picture directly, which is
+    what window_icon() is for. Wayland does not work that way: it ignores the
+    picture entirely and instead matches the window's app id against an
+    installed .desktop file, taking the icon from there. If nothing matches,
+    you get a blank space in the dock — which is exactly what was reported.
+
+    GTK derives that app id from argv[0] unless told otherwise, so it would be
+    "launch.py" from source and "Receipts" from the packaged build, while the
+    desktop file is receipts.desktop. Pinning it here makes all three agree.
+    """
+    if sys.platform == "darwin" or os.name == "nt":
+        return
+    try:
+        import gi
+
+        gi.require_version("Gtk", "3.0")
+        from gi.repository import GLib
+
+        GLib.set_prgname(APP_ID)
+        GLib.set_application_name("Receipts")
+    except Exception:
+        # No GTK bindings, or a Qt backend — the icon path still covers X11.
+        pass
+
+
+def windows_webview_missing() -> bool:
+    """True when Windows lacks the Edge WebView2 runtime.
+
+    This has to be checked up front. Without the runtime, pywebview does not
+    raise — it quietly falls back to the ancient IE engine, which cannot parse
+    the app's JavaScript. The user gets a blank white window, and because
+    nothing failed, the browser fallback never runs. A blank window is a much
+    worse outcome than a browser tab, so detect it and choose the tab.
+    """
+    if os.name != "nt":
+        return False
+    import winreg
+
+    key = (
+        r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients"
+        r"\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+    )
+    for root in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        try:
+            with winreg.OpenKey(root, key):
+                return False
+        except OSError:
+            continue
+    return True
 
 
 def free_port() -> int:
@@ -157,6 +214,11 @@ def main() -> int:
         import webview
     except ImportError:
         return open_in_browser("pywebview is not installed")
+
+    if windows_webview_missing():
+        return open_in_browser("the Microsoft Edge WebView2 runtime is not installed")
+
+    set_app_identity()
 
     try:
         window = webview.create_window(

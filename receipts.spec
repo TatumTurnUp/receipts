@@ -51,13 +51,32 @@ except ImportError:
     # in the default browser (see launch.py). Release builds always have it.
     print("receipts.spec: pywebview not installed — building the browser fallback")
 
+# Everything below is either unused, or an optional extra some dependency
+# probes for and falls back from cleanly. Listing them explicitly also makes
+# the build deterministic: without this, whatever happens to be installed on
+# the build machine leaks into the bundle. `cryptography` alone is 12 MB, and
+# arrives only because pypdf probes for it to read encrypted PDFs.
+EXCLUDES = [
+    # Never imported by anything here.
+    "tkinter", "matplotlib", "numpy", "pytest",
+    "PIL.ImageQt", "PIL.ImageTk", "PIL.ImageMath",
+    # Optional PDF encryption backends — pypdf guards all three imports.
+    "cryptography", "Crypto", "Cryptodome",
+    # Optional uvicorn log-config format; we pass log_level, never a YAML file.
+    "yaml",
+    # Optional requests charset detector.
+    "chardet",
+    # Optional uvicorn extras. The app runs with ws="none" and the plain
+    # asyncio loop, and uvicorn falls back cleanly when these are absent.
+    "websockets", "wsproto", "watchfiles", "uvloop", "httptools",
+]
+
 a = Analysis(
     ["launch.py"],
     pathex=[SPECPATH],
     binaries=[],
     datas=[
         ("static", "static"),      # the entire frontend
-        ("icon.svg", "."),
         # GTK and Qt need a real icon file at runtime; macOS and Windows take
         # theirs from the bundle metadata instead.
         ("build-assets/icon.png", "build-assets"),
@@ -65,8 +84,7 @@ a = Analysis(
     hiddenimports=HIDDEN,
     hookspath=[],
     runtime_hooks=[],
-    # Trim the heaviest things nothing here uses; keeps the download small.
-    excludes=["tkinter", "matplotlib", "numpy", "pytest", "PIL.ImageQt"],
+    excludes=EXCLUDES,
     noarchive=False,
 )
 
@@ -98,7 +116,7 @@ coll = COLLECT(
     exe,
     a.binaries,
     a.datas,
-    strip=False,
+    strip=not IS_MAC,
     upx=False,
     name=APP_NAME,
 )

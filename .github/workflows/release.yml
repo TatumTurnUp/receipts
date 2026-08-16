@@ -79,13 +79,18 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      # pywebview needs the system web view toolkit present at build time.
+      # pywebview needs the system web view toolkit AND Python bindings the
+      # build interpreter can actually import. apt's python3-gi is built for
+      # the distro's Python, not the one setup-python installed, so it has to
+      # come from pip against these headers — otherwise the bundle silently
+      # ships with no window and every Linux user gets a browser tab.
       - name: Install Linux web view libraries
         if: matrix.label == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libgirepository1.0-dev libcairo2-dev \
-            gir1.2-webkit2-4.1 python3-gi libgtk-3-dev
+            gir1.2-webkit2-4.1 libgtk-3-dev pkg-config
+          pip install "PyGObject<3.52" pycairo
 
       - name: Install dependencies
         run: |
@@ -112,8 +117,32 @@ jobs:
         if: startsWith(matrix.os, 'macos')
         run: iconutil -c icns build-assets/Receipts.iconset -o build-assets/icon.icns
 
+      # Fail loudly rather than shipping a degraded build. Without this the
+      # only symptom is that the app opens in a browser instead of a window,
+      # which nobody notices until a user reports it.
+      - name: Verify the native window backend is available
+        shell: bash
+        run: |
+          python - <<'PY'
+          import sys
+          if sys.platform == "darwin":
+              import webview.platforms.cocoa
+          elif sys.platform == "win32":
+              import webview.platforms.edgechromium
+          else:
+              import gi
+              gi.require_version("Gtk", "3.0")
+              gi.require_version("WebKit2", "4.1")
+              import webview.platforms.gtk
+          print("native window backend OK")
+          PY
+
       - name: Build the app
         run: pyinstaller receipts.spec --noconfirm
+
+      - name: Verify the bundle contains what it needs
+        shell: bash
+        run: python build-assets/verify_bundle.py
 
       # ---------------------------------------------------------------- macOS
       - name: Sign and notarize
@@ -169,6 +198,10 @@ jobs:
         shell: pwsh
         run: |
           choco install innosetup --no-progress -y
+          # Bundled so a machine without the WebView2 runtime gets it during
+          # install, rather than opening a blank white window later.
+          Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" `
+            -OutFile "build-assets\MicrosoftEdgeWebview2Setup.exe"
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
             "/DAppVersion=${{ needs.version.outputs.version }}" `
             "build-assets\receipts.iss"
@@ -184,7 +217,12 @@ jobs:
                    "$APPDIR/usr/share/icons/hicolor/512x512/apps"
           cp -r dist/Receipts/* "$APPDIR/usr/bin/"
           cp build-assets/icon.png "$APPDIR/receipts.png"
-          cp build-assets/icon.png "$APPDIR/usr/share/icons/hicolor/512x512/apps/receipts.png"
+          for size in 16 32 64 128 256 512; do
+            src="build-assets/icons/icon_${size}.png"
+            [ -f "$src" ] || continue
+            mkdir -p "$APPDIR/usr/share/icons/hicolor/${size}x${size}/apps"
+            cp "$src" "$APPDIR/usr/share/icons/hicolor/${size}x${size}/apps/receipts.png"
+          done
 
           cat > "$APPDIR/receipts.desktop" <<'EOF'
           [Desktop Entry]
@@ -194,6 +232,7 @@ jobs:
           Exec=Receipts
           Icon=receipts
           Categories=Utility;Office;
+          StartupWMClass=receipts
           EOF
           cp "$APPDIR/receipts.desktop" "$APPDIR/usr/share/applications/"
 

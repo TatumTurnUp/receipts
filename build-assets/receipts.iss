@@ -1,5 +1,6 @@
 ; Inno Setup script for the Receipts Windows installer.
-; Built by .github/workflows/release.yml; VERSION is passed in with /DAppVersion.
+; Built by .github/workflows/release.yml, which passes /DAppVersion and places
+; MicrosoftEdgeWebview2Setup.exe in this folder first.
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"
@@ -33,15 +34,36 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 
 [Files]
 Source: "..\dist\Receipts\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Only extracted, and only when the check below says it is needed.
+Source: "MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; \
+  Flags: deleteafterinstall; Check: WebView2Missing
 
 [Icons]
 Name: "{group}\Receipts"; Filename: "{app}\Receipts.exe"
 Name: "{autodesktop}\Receipts"; Filename: "{app}\Receipts.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\Receipts.exe"; Description: "Open Receipts"; Flags: nowait postinstall skipifsilent
+Filename: "{tmp}\MicrosoftEdgeWebview2Setup.exe"; Parameters: "/silent /install"; \
+  StatusMsg: "Installing a component Receipts needs..."; \
+  Check: WebView2Missing; Flags: waituntilterminated
+Filename: "{app}\Receipts.exe"; Description: "Open Receipts"; \
+  Flags: nowait postinstall skipifsilent
 
-; Note there is no [UninstallDelete] for the archive. Uninstalling Receipts
-; must never remove someone's data — it lives in %LOCALAPPDATA%\Receipts and
-; is deliberately left behind, so reinstalling picks up exactly where they
-; left off.
+[Code]
+// Receipts draws its window with the Edge WebView2 runtime. It ships with
+// current Windows 11 but is missing on plenty of Windows 10 machines — and
+// when it is missing pywebview does not fail, it quietly falls back to the old
+// Internet Explorer engine, which cannot run the app's JavaScript. The user
+// gets a blank white window and no error. Installing the runtime here is the
+// difference between "it just works" and a bug report nobody can diagnose.
+function WebView2Missing: Boolean;
+begin
+  Result := not RegKeyExists(HKLM,
+      'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}')
+    and not RegKeyExists(HKCU,
+      'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}');
+end;
+
+; Note there is deliberately no [UninstallDelete] for the archive. Uninstalling
+; Receipts must never remove someone's data — it lives in %LOCALAPPDATA%\Receipts
+; and is left behind on purpose, so reinstalling picks up where they left off.
