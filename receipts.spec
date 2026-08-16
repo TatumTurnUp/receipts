@@ -31,8 +31,9 @@ HIDDEN = [
     "uvicorn.loops.asyncio",
     "uvicorn.protocols.http.auto",
     "uvicorn.protocols.http.h11_impl",
-    "uvicorn.protocols.websockets.auto",
-    "uvicorn.protocols.websockets.websockets_impl",
+    # No websockets entries on purpose: the app runs uvicorn with ws="none",
+    # so bundling a WebSocket backend would only add weight and a version
+    # conflict to trip over.
     "uvicorn.lifespan.on",
     "uvicorn.lifespan.off",
 ]

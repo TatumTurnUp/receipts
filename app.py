@@ -2160,4 +2160,7 @@ if __name__ == "__main__":
     if not os.environ.get("RECEIPTS_NO_BROWSER"):
         threading.Timer(1.5, lambda: webbrowser.open("http://localhost:8765")).start()
     print("\n  Receipts is running →  http://localhost:8765\n")
-    uvicorn.run(app, host="127.0.0.1", port=8765, log_level="warning")
+    # ws="none": Receipts has no WebSocket endpoints, and loading a WebSocket
+    # backend it never uses is a startup failure waiting to happen on machines
+    # whose system `websockets` package is older than uvicorn expects.
+    uvicorn.run(app, host="127.0.0.1", port=8765, log_level="warning", ws="none")

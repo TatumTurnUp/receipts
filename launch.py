@@ -72,37 +72,86 @@ def main() -> int:
     url = f"http://{HOST}:{port}"
 
     server = uvicorn.Server(
-        uvicorn.Config(receipts.app, host=HOST, port=port, log_level="warning")
+        uvicorn.Config(
+            receipts.app,
+            host=HOST,
+            port=port,
+            log_level="warning",
+            # Receipts has no WebSocket endpoints. Left on "auto", uvicorn
+            # imports a WebSocket backend at startup anyway, and on a machine
+            # whose system `websockets` package is older than uvicorn expects
+            # that import raises and takes the whole server down — for a
+            # feature the app never uses. Turning it off removes the failure
+            # and a dependency we have no need of.
+            ws="none",
+        )
     )
-    threading.Thread(target=server.run, daemon=True).start()
+
+    # Without this, a server that dies on startup surfaces only as a bare
+    # "could not start", with the real reason buried in a thread traceback.
+    startup_error: list[BaseException] = []
+
+    def run_server():
+        try:
+            server.run()
+        except BaseException as exc:  # noqa: BLE001 — reported below, then re-raised nowhere
+            startup_error.append(exc)
+
+    threading.Thread(target=run_server, daemon=True).start()
 
     if not wait_until_up(port):
-        print("Receipts could not start its local server.")
+        print("\n  Receipts could not start its local server.")
+        if startup_error:
+            err = startup_error[0]
+            print(f"  {type(err).__name__}: {err}")
+            if isinstance(err, ImportError):
+                print(
+                    "\n  This usually means one of Receipts' dependencies is out of date.\n"
+                    "  Try:  pip3 install --upgrade -r requirements.txt\n"
+                )
+        else:
+            print(f"  Nothing was listening on port {port} after 30 seconds.\n")
         return 1
 
-    try:
-        import webview
-    except ImportError:
-        # No native web view available — a Linux box without WebKitGTK, say.
-        # Falling back to the default browser keeps Receipts usable instead of
-        # failing to open at all; everything but the window frame is identical.
+    def open_in_browser(reason: str = "") -> int:
+        """Last resort: hand the running server to the default browser.
+
+        Everything except the window frame is identical, so this keeps Receipts
+        fully usable on a machine that cannot give it a native window.
+        """
         import webbrowser
 
-        print(f"\n  {title}\n  Opening in your browser → {url}\n  Close this window to quit.\n")
+        print(f"\n  {title}")
+        if reason:
+            print(f"  (no app window available — {reason})")
+        print(f"  Opening in your browser → {url}")
+        print("  Press Ctrl-C here when you're done.\n")
         webbrowser.open(url)
         try:
             while not server.should_exit:
                 time.sleep(0.5)
         except KeyboardInterrupt:
-            pass
+            print("\n  Closing Receipts.")
         return 0
 
-    window = webview.create_window(
-        title, url, width=1280, height=860, min_size=(900, 600), text_select=True
-    )
-    window.events.closed += lambda: setattr(server, "should_exit", True)
+    try:
+        import webview
+    except ImportError:
+        return open_in_browser("pywebview is not installed")
 
-    webview.start()  # blocks until the window closes
+    try:
+        window = webview.create_window(
+            title, url, width=1280, height=860, min_size=(900, 600), text_select=True
+        )
+        window.events.closed += lambda: setattr(server, "should_exit", True)
+        webview.start()  # blocks until the window closes
+    except Exception as exc:
+        # pywebview imports fine but still cannot draw: no WebKitGTK on Linux,
+        # no WebView2 runtime on Windows, or no display at all. An installed
+        # library is not the same as a usable one, so the fallback has to cover
+        # a failure here too, not just a missing import.
+        return open_in_browser(f"{type(exc).__name__}: {exc}")
+
     server.should_exit = True
     return 0
 
