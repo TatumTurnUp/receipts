@@ -58,7 +58,13 @@ jobs:
         include:
           - os: macos-latest
             label: macos-arm64
-          - os: macos-13
+          # macos-13 was retired in December 2025; jobs pointed at it queue
+          # forever waiting for a machine that no longer exists. macos-15-intel
+          # is GitHub's free Intel replacement. Apple has discontinued x86_64,
+          # and GitHub drops it entirely when the macOS 15 image retires in
+          # autumn 2027 — at which point this row goes away and Intel Macs get
+          # the last build that shipped.
+          - os: macos-15-intel
             label: macos-intel
           - os: windows-latest
             label: windows

@@ -198,3 +198,21 @@ def test_install_guide_does_not_give_obsolete_mac_advice():
         line for line in install.splitlines() if not line.strip().startswith(">")
     )
     assert "right-click" not in body.lower() or "Open Anyway" in body
+
+
+def test_no_retired_runner_images():
+    """A job pointed at a retired runner queues forever instead of failing.
+
+    macos-13 was retired in December 2025 and the v0.9.0 Intel build sat
+    waiting for a machine that no longer exists.
+    """
+    retired = ["macos-13", "macos-12", "macos-11", "ubuntu-20.04", "windows-2019"]
+    for image in retired:
+        assert f"os: {image}\n" not in RELEASE_CODE, (
+            f"{image} has been retired; that job will queue indefinitely"
+        )
+
+
+def test_every_platform_still_has_a_build():
+    for label in ("macos-arm64", "macos-intel", "windows", "linux"):
+        assert f"label: {label}" in RELEASE_CODE, f"no build produces the {label} download"

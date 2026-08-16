@@ -42,6 +42,14 @@ Source: "MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; \
 Name: "{group}\Receipts"; Filename: "{app}\Receipts.exe"
 Name: "{autodesktop}\Receipts"; Filename: "{app}\Receipts.exe"; Tasks: desktopicon
 
+; Note there is deliberately no [UninstallDelete] section. Uninstalling
+; Receipts must never remove someone's data - it lives in %LOCALAPPDATA%\Receipts
+; and is left behind on purpose, so reinstalling picks up where they left off.
+;
+; This note lives here rather than at the end of the file because [Code] is
+; Pascal, where a semicolon starts a statement and not a comment. Three
+; explanatory lines down there aborted the compile with "'BEGIN' expected".
+
 [Run]
 Filename: "{tmp}\MicrosoftEdgeWebview2Setup.exe"; Parameters: "/silent /install"; \
   StatusMsg: "Installing a component Receipts needs..."; \
@@ -63,7 +71,3 @@ begin
     and not RegKeyExists(HKCU,
       'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}');
 end;
-
-; Note there is deliberately no [UninstallDelete] for the archive. Uninstalling
-; Receipts must never remove someone's data — it lives in %LOCALAPPDATA%\Receipts
-; and is left behind on purpose, so reinstalling picks up where they left off.
