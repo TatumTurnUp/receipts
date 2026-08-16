@@ -13,17 +13,36 @@ Run directly (`python launch.py`) or as the entry point of a packaged build.
 quicker loop while developing.
 """
 
+import inspect
 import os
 import socket
 import sys
 import threading
 import time
 from contextlib import closing
+from pathlib import Path
 
 os.environ.setdefault("RECEIPTS_NO_BROWSER", "1")  # the window is the browser
 
 HOST = "127.0.0.1"
 PREFERRED_PORT = 8765
+
+# Bundled read-only assets. PyInstaller unpacks them somewhere temporary, which
+# is not where this file lives, so resolve both cases the same way app.py does.
+ASSETS = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+
+
+def window_icon():
+    """Path to the window icon, or None if the platform sets it another way.
+
+    Only GTK and Qt take an icon at runtime. macOS and Windows read it from the
+    application bundle instead, which receipts.spec already handles — passing a
+    path there would do nothing.
+    """
+    if sys.platform == "darwin" or os.name == "nt":
+        return None
+    icon = ASSETS / "build-assets" / "icon.png"
+    return str(icon) if icon.exists() else None
 
 
 def free_port() -> int:
@@ -144,7 +163,16 @@ def main() -> int:
             title, url, width=1280, height=860, min_size=(900, 600), text_select=True
         )
         window.events.closed += lambda: setattr(server, "should_exit", True)
-        webview.start()  # blocks until the window closes
+
+        # Check the signature rather than catching TypeError: this call is
+        # inside the browser-fallback handler below, so a bad keyword would
+        # silently demote a working window to a browser tab.
+        start_kwargs = {}
+        icon = window_icon()
+        if icon and "icon" in inspect.signature(webview.start).parameters:
+            start_kwargs["icon"] = icon
+
+        webview.start(**start_kwargs)  # blocks until the window closes
     except Exception as exc:
         # pywebview imports fine but still cannot draw: no WebKitGTK on Linux,
         # no WebView2 runtime on Windows, or no display at all. An installed

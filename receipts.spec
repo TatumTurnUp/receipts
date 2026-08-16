@@ -58,6 +58,9 @@ a = Analysis(
     datas=[
         ("static", "static"),      # the entire frontend
         ("icon.svg", "."),
+        # GTK and Qt need a real icon file at runtime; macOS and Windows take
+        # theirs from the bundle metadata instead.
+        ("build-assets/icon.png", "build-assets"),
     ],
     hiddenimports=HIDDEN,
     hookspath=[],
