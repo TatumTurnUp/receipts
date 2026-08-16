@@ -15,6 +15,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 import legacy_schemas  # noqa: E402
+from subprocess_env import child_env  # noqa: E402
 from test_migrations import PROBE, run_app  # noqa: E402
 
 APP_ROOT = Path(__file__).resolve().parent.parent
@@ -36,12 +37,10 @@ def no_legacy_folder():
 
 def run_with_home(home: Path):
     """Import app.py with no RECEIPTS_DATA, so the default location is used."""
+    env = child_env(HOME=home, XDG_DATA_HOME=home / ".local" / "share")
+    env.pop("RECEIPTS_DATA", None)  # the point is to use the default location
     proc = subprocess.run(
-        [sys.executable, "-c", PROBE],
-        cwd=APP_ROOT,
-        env={"PATH": "/usr/bin:/bin:/usr/local/bin", "HOME": str(home),
-             "XDG_DATA_HOME": str(home / ".local" / "share"),
-             "RECEIPTS_NO_BROWSER": "1"},
+        [sys.executable, "-c", PROBE], cwd=APP_ROOT, env=env,
         capture_output=True, text=True,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr

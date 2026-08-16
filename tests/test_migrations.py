@@ -19,6 +19,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 import legacy_schemas  # noqa: E402
+from subprocess_env import child_env  # noqa: E402
 
 APP_ROOT = Path(__file__).resolve().parent.parent
 
@@ -47,8 +48,7 @@ def run_app(data_dir: Path, code: str = PROBE, expect_ok: bool = True):
     proc = subprocess.run(
         [sys.executable, "-c", code],
         cwd=APP_ROOT,
-        env={"PATH": "/usr/bin:/bin:/usr/local/bin", "RECEIPTS_DATA": str(data_dir),
-             "RECEIPTS_NO_BROWSER": "1", "HOME": str(data_dir.parent)},
+        env=child_env(RECEIPTS_DATA=data_dir, HOME=data_dir.parent),
         capture_output=True,
         text=True,
     )
@@ -215,8 +215,7 @@ conn.close()
     proc = subprocess.run(
         [sys.executable, "-c", inject],
         cwd=APP_ROOT,
-        env={"PATH": "/usr/bin:/bin:/usr/local/bin", "RECEIPTS_DATA": str(data),
-             "RECEIPTS_NO_BROWSER": "1", "HOME": str(tmp_path)},
+        env=child_env(RECEIPTS_DATA=data, HOME=tmp_path),
         capture_output=True, text=True,
     )
     assert "EXPECTED-FAILURE" in proc.stdout, proc.stdout + proc.stderr
