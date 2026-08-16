@@ -26,6 +26,8 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlsplit
 
+from console import say
+
 # Names that mean "this machine". Anything else is somebody else.
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", ""}
 
@@ -100,8 +102,8 @@ def adopt_legacy_data(dest: Path) -> bool:
         return False
     if not (LEGACY_DATA / "receipts.db").exists() or (dest / "receipts.db").exists():
         return False
-    print(f"\n  Moving your archive to:\n    {dest}")
-    print("  (the old copy is left in place, untouched, as a safety net)\n")
+    say(f"\n  Moving your archive to:\n    {dest}")
+    say("  (the old copy is left in place, untouched, as a safety net)\n")
     dest.mkdir(parents=True, exist_ok=True)
     for item in LEGACY_DATA.iterdir():
         target = dest / item.name
@@ -298,7 +300,7 @@ def ensure_fts_in_sync(conn: sqlite3.Connection):
     if n_records == n_indexed:
         return
 
-    print(f"  Search index out of step ({n_indexed} indexed vs {n_records} records) — reindexing.")
+    say(f"  Search index out of step ({n_indexed} indexed vs {n_records} records) - reindexing.")
     conn.execute("INSERT INTO records_fts(records_fts) VALUES('delete-all')")
     conn.execute(
         "INSERT INTO records_fts(rowid, title, body, description, tags, user_context) "
@@ -325,7 +327,7 @@ def migrate(conn: sqlite3.Connection):
 
     snap = snapshot_db(f"pre-v{v}-to-v{SCHEMA_VERSION}") if DB_EXISTED_AT_STARTUP else None
     if snap:
-        print(f"  Updating archive format v{v} → v{SCHEMA_VERSION}. Backup saved: {snap.name}")
+        say(f"  Updating archive format v{v} -> v{SCHEMA_VERSION}. Backup saved: {snap.name}")
 
     # All-or-nothing: a migration that fails halfway leaves the archive exactly
     # as it was, rather than half-converted.
@@ -348,8 +350,8 @@ def migrate(conn: sqlite3.Connection):
         except Exception:
             pass
         if snap:
-            print(f"\n  Archive update failed — your data was rolled back and is unchanged.")
-            print(f"  A copy from before the attempt is at: {snap}\n")
+            say(f"\n  Archive update failed - your data was rolled back and is unchanged.")
+            say(f"  A copy from before the attempt is at: {snap}\n")
         raise
     finally:
         conn.isolation_level = prev_isolation
@@ -479,7 +481,7 @@ def report_fatal(title: str, detail: str) -> None:
     """Tell the user why Receipts is not starting, without a terminal.
 
     A packaged build is windowed: there is no console, so sys.stdout is None on
-    Windows and inside a macOS .app, and print() is a silent no-op. Exiting via
+    Windows and inside a macOS .app, and say() is a silent no-op. Exiting via
     SystemExit is a *clean* exit, so PyInstaller's crash dialog does not fire
     either. Without this, a beta tester who rolls back to the stable build
     double-clicks Receipts and absolutely nothing happens — no window, no
@@ -499,7 +501,7 @@ def report_fatal(title: str, detail: str) -> None:
         pass
 
     if sys.stdout is not None:
-        print(f"\n  {title}\n\n  {detail}\n\n  Archive location: {DATA}\n")
+        say(f"\n  {title}\n\n  {detail}\n\n  Archive location: {DATA}\n")
         return
 
     try:
@@ -2306,7 +2308,7 @@ if __name__ == "__main__":
 
     if not os.environ.get("RECEIPTS_NO_BROWSER"):
         threading.Timer(1.5, lambda: webbrowser.open("http://localhost:8765")).start()
-    print("\n  Receipts is running →  http://localhost:8765\n")
+    say("\n  Receipts is running ->  http://localhost:8765\n")
     # ws="none": Receipts has no WebSocket endpoints, and loading a WebSocket
     # backend it never uses is a startup failure waiting to happen on machines
     # whose system `websockets` package is older than uvicorn expects.

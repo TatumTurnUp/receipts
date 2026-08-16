@@ -22,6 +22,8 @@ import time
 from contextlib import closing
 from pathlib import Path
 
+from console import say
+
 os.environ.setdefault("RECEIPTS_NO_BROWSER", "1")  # the window is the browser
 
 HOST = "127.0.0.1"
@@ -135,7 +137,7 @@ def main() -> int:
     try:
         import uvicorn
     except ImportError:
-        print("Missing dependencies. Install with:\n    pip install -r requirements.txt")
+        say("Missing dependencies. Install with:\n    pip install -r requirements.txt")
         return 1
 
     # Imported after the env var is set, and inside main(), so that a failure
@@ -176,17 +178,17 @@ def main() -> int:
     threading.Thread(target=run_server, daemon=True).start()
 
     if not wait_until_up(port):
-        print("\n  Receipts could not start its local server.")
+        say("\n  Receipts could not start its local server.")
         if startup_error:
             err = startup_error[0]
-            print(f"  {type(err).__name__}: {err}")
+            say(f"  {type(err).__name__}: {err}")
             if isinstance(err, ImportError):
-                print(
+                say(
                     "\n  This usually means one of Receipts' dependencies is out of date.\n"
                     "  Try:  pip3 install --upgrade -r requirements.txt\n"
                 )
         else:
-            print(f"  Nothing was listening on port {port} after 30 seconds.\n")
+            say(f"  Nothing was listening on port {port} after 30 seconds.\n")
         return 1
 
     def open_in_browser(reason: str = "") -> int:
@@ -197,17 +199,17 @@ def main() -> int:
         """
         import webbrowser
 
-        print(f"\n  {title}")
+        say(f"\n  {title}")
         if reason:
-            print(f"  (no app window available — {reason})")
-        print(f"  Opening in your browser → {url}")
-        print("  Press Ctrl-C here when you're done.\n")
+            say(f"  (no app window available - {reason})")
+        say(f"  Opening in your browser -> {url}")
+        say("  Press Ctrl-C here when you're done.\n")
         webbrowser.open(url)
         try:
             while not server.should_exit:
                 time.sleep(0.5)
         except KeyboardInterrupt:
-            print("\n  Closing Receipts.")
+            say("\n  Closing Receipts.")
         return 0
 
     try:
